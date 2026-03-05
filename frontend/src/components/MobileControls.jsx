@@ -12,7 +12,7 @@ function useTouchDevice() {
   }, []);
 }
 
-export default function MobileControls({ onDirection, onTargetY }) {
+export default function MobileControls({ onDirection, onTargetY, className = "" }) {
   const isTouchDevice = useTouchDevice();
   const [active, setActive] = useState(0);
   const draggingRef = useRef(false);
@@ -60,9 +60,10 @@ export default function MobileControls({ onDirection, onTargetY }) {
   };
 
   return (
-    <div className="grid gap-3 md:hidden" style={{ touchAction: "none" }}>
+    <div className={className} style={{ touchAction: "none" }}>
+      <div className="flex h-full flex-col gap-2">
       <div
-        className="neon-panel relative h-32 rounded-xl select-none"
+        className="neon-panel relative min-h-[220px] flex-1 rounded-xl select-none"
         style={{ touchAction: "none" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -73,10 +74,10 @@ export default function MobileControls({ onDirection, onTargetY }) {
         onTouchEnd={handlePointerEnd}
       >
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs uppercase tracking-[0.2em] text-slate-300">
-          Slide to move
+          Slide
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-2">
         <button
           type="button"
           className={`neon-button rounded-xl py-3 text-sm font-semibold uppercase ${
@@ -132,6 +133,7 @@ export default function MobileControls({ onDirection, onTargetY }) {
           Down
         </button>
       </div>
+    </div>
     </div>
   );
 }
