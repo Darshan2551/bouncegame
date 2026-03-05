@@ -189,6 +189,7 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
             targetY: player.paddle.y,
           };
           const isLocal = player.id === playerId && localControlRef?.current && !player.isBot;
+          const localControl = isLocal ? localControlRef.current : null;
           const jumped =
             Math.abs(prev.x - player.paddle.x) > 260 || Math.abs(prev.y - player.paddle.y) > 260;
           const halfHeight = player.paddle.height / 2;
@@ -207,7 +208,7 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
             let desiredTargetX = player.paddle.x;
 
             if (isLocal && (state.status === "live" || state.status === "countdown")) {
-              const localNorm = Number(localControlRef.current.targetNorm);
+              const localNorm = Number(localControl?.targetNorm);
               if (Number.isFinite(localNorm)) {
                 desiredTargetY = clamp(localNorm, 0, 1) * arena.height;
                 desiredTargetY = clamp(desiredTargetY, limitTop, limitBottom);
@@ -218,22 +219,37 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
             }
 
             const targetAlpha = Math.min(1, dt * 24);
-            const moveAlpha = isLocal ? Math.min(1, dt * 20) : Math.min(1, dt * 16);
+            const moveAlpha = isLocal ? Math.min(1, dt * 24) : Math.min(1, dt * 16);
             prev.targetY = lerp(prev.targetY, desiredTargetY, targetAlpha);
             prev.y = lerp(prev.y, prev.targetY, moveAlpha);
             prev.x = lerp(prev.x, desiredTargetX, paddleAlpha);
 
-            const pendingInputs = isLocal ? localControlRef.current.pendingInputs.length : 0;
-            const correctionAlpha = isLocal
-              ? pendingInputs > 0
-                ? Math.min(1, dt * 4)
-                : Math.min(1, dt * 9)
-              : Math.min(1, dt * 8);
+            const pendingInputs = isLocal ? localControl?.pendingInputs.length || 0 : 0;
+            const inputActive = isLocal ? Boolean(localControl?.inputActive) : false;
+            const inputAgeMs = isLocal ? frameTs - Number(localControl?.lastInputAt || 0) : Number.POSITIVE_INFINITY;
+            const recentlyControlled = isLocal && (inputActive || inputAgeMs < 90);
+
+            let correctionAlpha = Math.min(1, dt * 8);
+            if (isLocal) {
+              if (recentlyControlled && pendingInputs > 0) {
+                correctionAlpha = Math.min(1, dt * 1.45);
+              } else if (recentlyControlled) {
+                correctionAlpha = Math.min(1, dt * 3.3);
+              } else if (pendingInputs > 0) {
+                correctionAlpha = Math.min(1, dt * 5.8);
+              } else {
+                correctionAlpha = Math.min(1, dt * 10);
+              }
+            }
             const correctionGap = authoritativeY - prev.y;
-            if (Math.abs(correctionGap) > 130) {
+            const snapGap = isLocal && recentlyControlled ? 170 : 130;
+            const deferTinyCorrection =
+              isLocal && recentlyControlled && pendingInputs > 0 && Math.abs(correctionGap) < 20;
+
+            if (Math.abs(correctionGap) > snapGap) {
               prev.y = authoritativeY;
               prev.targetY = authoritativeY;
-            } else {
+            } else if (!deferTinyCorrection) {
               prev.y += correctionGap * correctionAlpha;
             }
 

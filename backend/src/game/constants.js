@@ -2,7 +2,7 @@ const ARENA_WIDTH = 1280;
 const ARENA_HEIGHT = 720;
 
 const TICK_RATE = 60;
-const BROADCAST_RATE = 20;
+const BROADCAST_RATE = 30;
 
 const PADDLE_WIDTH = 20;
 const PADDLE_HEIGHT = 150;

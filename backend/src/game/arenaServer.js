@@ -707,6 +707,7 @@ class ArenaServer {
     if (!player) {
       return;
     }
+    const now = Date.now();
 
     const seq = Number(payload.seq);
     if (Number.isFinite(seq)) {
@@ -722,11 +723,12 @@ class ArenaServer {
 
     if (typeof payload.targetY === "number" && Number.isFinite(payload.targetY)) {
       player.paddle.targetY = clamp(payload.targetY, 0, 1);
-      player.paddle.lastInputAt = Date.now();
+      player.paddle.lastInputAt = now;
     }
 
     if (payload.targetY === null) {
       player.paddle.targetY = null;
+      player.paddle.lastInputAt = 0;
     }
   }
 
@@ -955,7 +957,7 @@ class ArenaServer {
       speed *= AI_DIFFICULTY[player.ai.difficulty]?.speedScale || 1;
     }
 
-    if (player.paddle.targetY !== null && now - player.paddle.lastInputAt <= 220) {
+    if (player.paddle.targetY !== null && now - player.paddle.lastInputAt <= 420) {
       const target = clamp(
         player.paddle.targetY * ARENA_HEIGHT,
         player.paddle.height / 2,

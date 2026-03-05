@@ -17,6 +17,10 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function lerp(from, to, alpha) {
+  return from + (to - from) * alpha;
+}
+
 export default function GameScreen({
   room,
   playerId,
@@ -29,16 +33,23 @@ export default function GameScreen({
   onLeave,
 }) {
   const keysRef = useRef(Object.create(null));
-  const swipeRef = useRef({ active: false, startY: 0 });
+  const swipeRef = useRef({
+    active: false,
+    pointerId: null,
+    smoothedNorm: 0.5,
+  });
   const inputStateRef = useRef({
     targetNorm: 0.5,
     lastTargetSentAt: 0,
     lastSentNorm: null,
+    lastSentDirection: 0,
   });
   const localControlRef = useRef({
     targetNorm: 0.5,
     authoritativeNorm: 0.5,
     direction: 0,
+    inputActive: false,
+    lastInputAt: 0,
     nextInputSeq: 1,
     lastAckSeq: 0,
     pendingInputs: [],
@@ -82,16 +93,39 @@ export default function GameScreen({
     const hasKeyboardInput =
       Boolean(keysRef.current.w || keysRef.current.arrowup) ||
       Boolean(keysRef.current.s || keysRef.current.arrowdown);
-    if (!swipeRef.current.active && !hasKeyboardInput && control.pendingInputs.length === 0) {
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const recentlyActive = control.inputActive || now - control.lastInputAt < 90;
+    if (!swipeRef.current.active && !hasKeyboardInput && control.pendingInputs.length === 0 && !recentlyActive) {
       inputStateRef.current.targetNorm = authoritativeNorm;
       control.targetNorm = authoritativeNorm;
     }
   }, [isSpectator, localPlayer, room?.arena?.height]);
 
-  const setTouchTarget = useCallback((nextValue) => {
+  const markLocalInput = useCallback((active, timestamp) => {
+    const control = localControlRef.current;
+    const now = Number.isFinite(timestamp)
+      ? timestamp
+      : typeof performance !== "undefined"
+        ? performance.now()
+        : Date.now();
+    control.inputActive = Boolean(active);
+    control.lastInputAt = now;
+  }, []);
+
+  const setTouchTarget = useCallback((nextValue, timestamp) => {
     const normalized = clamp(nextValue, 0, 1);
-    inputStateRef.current.targetNorm = normalized;
-    localControlRef.current.targetNorm = normalized;
+    const state = inputStateRef.current;
+    if (Math.abs(normalized - state.targetNorm) < 0.0002) {
+      return;
+    }
+    state.targetNorm = normalized;
+    const control = localControlRef.current;
+    control.targetNorm = normalized;
+    control.lastInputAt = Number.isFinite(timestamp)
+      ? timestamp
+      : typeof performance !== "undefined"
+        ? performance.now()
+        : Date.now();
   }, []);
 
   const emitInputCommand = useCallback((payload, sentAt) => {
@@ -111,7 +145,7 @@ export default function GameScreen({
       const last = pending[pending.length - 1] || null;
       if (
         !last ||
-        Math.abs(last.targetY - packet.targetY) > 0.0005 ||
+        Math.abs(last.targetY - packet.targetY) > 0.0015 ||
         Math.abs(last.direction - packet.direction) > 0.01
       ) {
         pending.push({
@@ -130,57 +164,111 @@ export default function GameScreen({
   }, []);
 
   const clearTouchTarget = useCallback(() => {
-    swipeRef.current.active = false;
-    swipeRef.current.startY = 0;
-  }, []);
+    const swipe = swipeRef.current;
+    swipe.active = false;
+    swipe.pointerId = null;
+    markLocalInput(false);
+  }, [markLocalInput]);
 
-  const handleArenaTouchStart = useCallback(
+  const handleArenaPointerDown = useCallback(
     (event) => {
       if (isSpectator) {
         return;
       }
-      const touch = event.touches?.[0];
-      if (!touch) {
+      if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
       const rect = event.currentTarget.getBoundingClientRect();
-      const normalized = clamp((touch.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
+      const normalized = clamp((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
       keysRef.current = Object.create(null);
-      swipeRef.current.active = true;
-      swipeRef.current.startY = touch.clientY;
-      setTouchTarget(normalized);
+      const swipe = swipeRef.current;
+      swipe.active = true;
+      swipe.pointerId = event.pointerId;
+      swipe.smoothedNorm = normalized;
+
+      if (event.currentTarget.setPointerCapture) {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch (_error) {
+          // Ignore pointer capture failures in older browsers.
+        }
+      }
+
+      setTouchTarget(normalized, now);
+      markLocalInput(true, now);
       event.preventDefault();
     },
-    [isSpectator, setTouchTarget]
+    [isSpectator, markLocalInput, setTouchTarget]
   );
 
-  const handleArenaTouchMove = useCallback(
+  const handleArenaPointerMove = useCallback(
     (event) => {
       if (isSpectator) {
         return;
       }
-      const touch = event.touches?.[0];
-      if (!touch || !swipeRef.current.active) {
+      const swipe = swipeRef.current;
+      if (!swipe.active || swipe.pointerId !== event.pointerId) {
         return;
       }
       const rect = event.currentTarget.getBoundingClientRect();
-      const delta = touch.clientY - swipeRef.current.startY;
-      const currentNorm = inputStateRef.current.targetNorm;
-      const sensitivity = 1.08 / Math.max(rect.height, 1);
-      const nextNorm = currentNorm + delta * sensitivity;
-      swipeRef.current.startY = touch.clientY;
-      setTouchTarget(nextNorm);
+      const normalized = clamp((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
+      const distance = Math.abs(normalized - swipe.smoothedNorm);
+      const alpha = distance > 0.1 ? 0.82 : distance > 0.035 ? 0.7 : 0.56;
+      const smoothed = clamp(lerp(swipe.smoothedNorm, normalized, alpha), 0, 1);
+      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+      swipe.smoothedNorm = smoothed;
+      setTouchTarget(smoothed, now);
+      markLocalInput(true, now);
       event.preventDefault();
     },
-    [isSpectator, setTouchTarget]
+    [isSpectator, markLocalInput, setTouchTarget]
   );
 
-  const handleArenaTouchEnd = useCallback(() => {
-    if (isSpectator) {
+  const handleArenaPointerUp = useCallback(
+    (event) => {
+      if (isSpectator) {
+        return;
+      }
+      const swipe = swipeRef.current;
+      if (!swipe.active || swipe.pointerId !== event.pointerId) {
+        return;
+      }
+      if (event.currentTarget.releasePointerCapture) {
+        try {
+          event.currentTarget.releasePointerCapture(event.pointerId);
+        } catch (_error) {
+          // Ignore pointer release failures in older browsers.
+        }
+      }
+      clearTouchTarget();
+    },
+    [clearTouchTarget, isSpectator]
+  );
+
+  const handleArenaPointerCancel = useCallback(
+    (event) => {
+      if (isSpectator) {
+        return;
+      }
+      const swipe = swipeRef.current;
+      if (!swipe.active || swipe.pointerId !== event.pointerId) {
+        return;
+      }
+      clearTouchTarget();
+    },
+    [clearTouchTarget, isSpectator]
+  );
+
+  useEffect(() => {
+    if (!isTouchDevice) {
       return;
     }
-    clearTouchTarget();
-  }, [clearTouchTarget, isSpectator]);
+    return () => {
+      clearTouchTarget();
+    };
+  }, [clearTouchTarget, isTouchDevice]);
 
   useEffect(() => {
     if (isSpectator) {
@@ -215,7 +303,12 @@ export default function GameScreen({
 
     const onBlur = () => {
       keysRef.current = Object.create(null);
-      localControlRef.current.direction = 0;
+      const control = localControlRef.current;
+      control.direction = 0;
+      control.inputActive = false;
+      const swipe = swipeRef.current;
+      swipe.active = false;
+      swipe.pointerId = null;
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -251,16 +344,26 @@ export default function GameScreen({
         state.targetNorm = clamp(state.targetNorm + direction * keyboardSpeedNormPerSec * dt, 0, 1);
       }
 
-      localControlRef.current.direction = direction;
-      localControlRef.current.targetNorm = state.targetNorm;
+      const control = localControlRef.current;
+      const swipeActive = swipeRef.current.active;
+      control.direction = direction;
+      control.targetNorm = state.targetNorm;
+      control.inputActive = swipeActive || direction !== 0;
+      if (control.inputActive) {
+        control.lastInputAt = now;
+      }
 
-      const sendInterval = direction !== 0 || swipeRef.current.active ? 16 : 45;
+      const directionChanged = direction !== state.lastSentDirection;
+      const sendInterval = swipeActive ? 12 : direction !== 0 ? 14 : 40;
+      const normDeltaThreshold = swipeActive ? 0.0008 : 0.0018;
       if (
         state.lastSentNorm === null ||
-        Math.abs(state.targetNorm - state.lastSentNorm) > 0.002 ||
+        Math.abs(state.targetNorm - state.lastSentNorm) > normDeltaThreshold ||
+        directionChanged ||
         now - state.lastTargetSentAt >= sendInterval
       ) {
         state.lastSentNorm = state.targetNorm;
+        state.lastSentDirection = direction;
         state.lastTargetSentAt = now;
         emitInputCommand({ direction, targetY: state.targetNorm }, now);
       }
@@ -273,10 +376,16 @@ export default function GameScreen({
       cancelAnimationFrame(rafId);
       const state = inputStateRef.current;
       state.lastSentNorm = null;
+      state.lastSentDirection = 0;
       state.lastTargetSentAt = 0;
       const control = localControlRef.current;
       control.direction = 0;
+      control.inputActive = false;
+      control.lastInputAt = 0;
       control.pendingInputs = [];
+      const swipe = swipeRef.current;
+      swipe.active = false;
+      swipe.pointerId = null;
       emitInputCommand({ direction: 0, targetY: null }, performance.now());
     };
   }, [emitInputCommand, isSpectator]);
@@ -303,7 +412,7 @@ export default function GameScreen({
   }, [localPlayer]);
 
   return (
-    <div className="relative min-h-screen p-3 md:p-5">
+    <div className="relative min-h-screen p-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:p-5">
       <div className="mx-auto flex max-w-7xl flex-col gap-3">
         <div className="neon-panel rounded-xl px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -347,12 +456,12 @@ export default function GameScreen({
 
         <div className="grid gap-3 lg:grid-cols-[1fr,290px]">
           <div
-            className="relative h-[60vh] min-h-[380px] select-none md:h-[72vh]"
+            className="relative h-[64vh] min-h-[300px] select-none sm:min-h-[360px] md:h-[72vh]"
             style={{ touchAction: isSpectator ? "auto" : "none" }}
-            onTouchStart={isSpectator ? undefined : handleArenaTouchStart}
-            onTouchMove={isSpectator ? undefined : handleArenaTouchMove}
-            onTouchEnd={isSpectator ? undefined : handleArenaTouchEnd}
-            onTouchCancel={isSpectator ? undefined : handleArenaTouchEnd}
+            onPointerDown={isSpectator || !isTouchDevice ? undefined : handleArenaPointerDown}
+            onPointerMove={isSpectator || !isTouchDevice ? undefined : handleArenaPointerMove}
+            onPointerUp={isSpectator || !isTouchDevice ? undefined : handleArenaPointerUp}
+            onPointerCancel={isSpectator || !isTouchDevice ? undefined : handleArenaPointerCancel}
           >
             <GameCanvas
               room={room}
@@ -382,7 +491,7 @@ export default function GameScreen({
 
             {!isSpectator && isTouchDevice && (
               <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-cyan-200/30 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-100/90">
-                Swipe up/down to move paddle
+                Drag anywhere to move paddle
               </div>
             )}
 
@@ -391,7 +500,7 @@ export default function GameScreen({
             )}
           </div>
 
-          <div className="space-y-3">
+          <div className="space-y-3 md:grid md:grid-cols-2 md:gap-3 md:space-y-0 lg:block lg:space-y-3">
             <div className="neon-panel rounded-xl p-3">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Players</div>
               <div className="mt-2 space-y-2 text-sm">
