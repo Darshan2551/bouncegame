@@ -101,7 +101,7 @@ export default function GameScreen({
       if (directionRef.current !== 0) {
         onSendInput({ direction: directionRef.current });
       }
-    }, 16);
+    }, 24);
     return () => clearInterval(timer);
   }, [isSpectator, onSendInput]);
 
@@ -127,8 +127,8 @@ export default function GameScreen({
   }, [localPlayer]);
 
   return (
-    <div className="relative h-[100dvh] overflow-hidden p-2 md:p-4">
-      <div className="mx-auto flex h-full max-w-7xl flex-col gap-2 md:gap-3">
+    <div className="relative min-h-screen p-3 md:p-5">
+      <div className="mx-auto flex max-w-7xl flex-col gap-3">
         <div className="neon-panel rounded-xl px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
@@ -169,54 +169,9 @@ export default function GameScreen({
           </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 gap-3 lg:grid-cols-[1fr,290px]">
-          <div className="relative h-full min-h-0 overflow-hidden rounded-2xl">
-            <GameCanvas room={room} playerId={playerId} localInputDirection={isSpectator ? 0 : direction} />
-
-            {!isSpectator && (
-              <div className="pointer-events-none absolute left-3 top-3 z-20 rounded-lg border border-amber-300/30 bg-slate-900/70 px-2 py-1 text-xs text-slate-200 lg:hidden">
-                <div className="flex items-center gap-2">
-                  <span>Rage {Math.round(rage)}%</span>
-                  <button
-                    type="button"
-                    onClick={onActivateUltimate}
-                    disabled={rage < 100}
-                    className="pointer-events-auto rounded border border-amber-300/40 bg-amber-500/20 px-2 py-0.5 uppercase disabled:opacity-40"
-                  >
-                    Smash
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {!isSpectator && (
-              <div className="pointer-events-none absolute inset-y-3 right-3 z-20 w-20 lg:hidden">
-                <MobileControls
-                  className="pointer-events-auto h-full"
-                  onDirection={(value) => applyDirection(value)}
-                  onTargetY={(value) => onSendInput({ targetY: value })}
-                />
-              </div>
-            )}
-
-            {!isSpectator && (
-              <div className="absolute bottom-3 left-3 right-28 z-20 lg:hidden">
-                <div className="neon-panel rounded-lg p-2">
-                  <div className="grid grid-cols-6 gap-1">
-                    {(room.emojis || []).slice(0, 6).map((emoji) => (
-                      <button
-                        key={emoji}
-                        type="button"
-                        onClick={() => onSendReaction("emoji", emoji)}
-                        className="rounded border border-cyan-300/35 bg-slate-900/75 py-1 text-base"
-                      >
-                        {emoji}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+        <div className="grid gap-3 lg:grid-cols-[1fr,290px]">
+          <div className="relative h-[60vh] min-h-[380px] md:h-[72vh]">
+            <GameCanvas room={room} playerId={playerId} />
 
             <AnimatePresence>
               {room.status === "countdown" && (
@@ -243,7 +198,7 @@ export default function GameScreen({
             )}
           </div>
 
-          <div className="hidden space-y-3 overflow-auto lg:block">
+          <div className="space-y-3">
             <div className="neon-panel rounded-xl p-3">
               <div className="text-xs uppercase tracking-[0.18em] text-slate-300">Players</div>
               <div className="mt-2 space-y-2 text-sm">
@@ -313,6 +268,13 @@ export default function GameScreen({
                 onSend={(type, value) => {
                   onSendReaction(type, value);
                 }}
+              />
+            )}
+
+            {!isSpectator && (
+              <MobileControls
+                onDirection={(value) => applyDirection(value)}
+                onTargetY={(value) => onSendInput({ targetY: value })}
               />
             )}
           </div>

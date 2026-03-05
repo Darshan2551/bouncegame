@@ -17,17 +17,12 @@ function lerp(from, to, alpha) {
   return from + (to - from) * alpha;
 }
 
-function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
-}
-
-export default function GameCanvas({ room, playerId, localInputDirection = 0 }) {
+export default function GameCanvas({ room, playerId }) {
   const canvasRef = useRef(null);
   const stateRef = useRef(room);
   const particlesRef = useRef([]);
   const impactIdRef = useRef(null);
   const lastFrameRef = useRef(performance.now());
-  const inputRef = useRef(localInputDirection);
   const renderStateRef = useRef({
     initialized: false,
     ball: { x: 0, y: 0 },
@@ -37,10 +32,6 @@ export default function GameCanvas({ room, playerId, localInputDirection = 0 }) 
   useEffect(() => {
     stateRef.current = room;
   }, [room]);
-
-  useEffect(() => {
-    inputRef.current = localInputDirection;
-  }, [localInputDirection]);
 
   useEffect(() => {
     const impact = room?.lastImpact;
@@ -197,16 +188,6 @@ export default function GameCanvas({ room, playerId, localInputDirection = 0 }) 
       for (const player of state.players) {
         const style = PADDLE_STYLES[player.paddleStyle] || PADDLE_STYLES["Neon Paddle"];
         const smoothed = renderState.players.get(player.id) || player.paddle;
-
-        if (player.id === playerId && inputRef.current !== 0 && player.effects.freezeMs <= 0) {
-          let localSpeed = 540;
-          if (player.effects.speedBoostMs > 0) {
-            localSpeed *= 1.45;
-          }
-          smoothed.y += inputRef.current * localSpeed * dt;
-          smoothed.y = clamp(smoothed.y, player.paddle.height / 2, arena.height - player.paddle.height / 2);
-        }
-
         const px = toX(smoothed.x - player.paddle.width / 2);
         const py = toY(smoothed.y - player.paddle.height / 2);
         const pw = toX(player.paddle.width);
