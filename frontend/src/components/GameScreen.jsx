@@ -17,10 +17,6 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function lerp(from, to, alpha) {
-  return from + (to - from) * alpha;
-}
-
 export default function GameScreen({
   room,
   playerId,
@@ -33,11 +29,6 @@ export default function GameScreen({
   onLeave,
 }) {
   const keysRef = useRef(Object.create(null));
-  const swipeRef = useRef({
-    active: false,
-    pointerId: null,
-    smoothedNorm: 0.5,
-  });
   const inputStateRef = useRef({
     targetNorm: 0.5,
     lastTargetSentAt: 0,
@@ -95,37 +86,62 @@ export default function GameScreen({
       Boolean(keysRef.current.s || keysRef.current.arrowdown);
     const now = typeof performance !== "undefined" ? performance.now() : Date.now();
     const recentlyActive = control.inputActive || now - control.lastInputAt < 90;
-    if (!swipeRef.current.active && !hasKeyboardInput && control.pendingInputs.length === 0 && !recentlyActive) {
+    if (!hasKeyboardInput && control.pendingInputs.length === 0 && !recentlyActive) {
       inputStateRef.current.targetNorm = authoritativeNorm;
       control.targetNorm = authoritativeNorm;
     }
   }, [isSpectator, localPlayer, room?.arena?.height]);
 
-  const markLocalInput = useCallback((active, timestamp) => {
+  const refreshInputActivity = useCallback(() => {
     const control = localControlRef.current;
-    const now = Number.isFinite(timestamp)
-      ? timestamp
-      : typeof performance !== "undefined"
-        ? performance.now()
-        : Date.now();
-    control.inputActive = Boolean(active);
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    control.inputActive =
+      Boolean(keysRef.current.w || keysRef.current.arrowup) ||
+      Boolean(keysRef.current.s || keysRef.current.arrowdown);
     control.lastInputAt = now;
   }, []);
 
-  const setTouchTarget = useCallback((nextValue, timestamp) => {
-    const normalized = clamp(nextValue, 0, 1);
+  const handleMobileHoldStart = useCallback(
+    (direction, event) => {
+      if (isSpectator || !isTouchDevice) {
+        return;
+      }
+      event.preventDefault();
+      if (direction < 0) {
+        keysRef.current.arrowup = true;
+        keysRef.current.arrowdown = false;
+      } else {
+        keysRef.current.arrowdown = true;
+        keysRef.current.arrowup = false;
+      }
+      refreshInputActivity();
+    },
+    [isSpectator, isTouchDevice, refreshInputActivity]
+  );
+
+  const handleMobileHoldEnd = useCallback(
+    (direction, event) => {
+      if (isSpectator || !isTouchDevice) {
+        return;
+      }
+      event.preventDefault();
+      if (direction < 0) {
+        keysRef.current.arrowup = false;
+      } else {
+        keysRef.current.arrowdown = false;
+      }
+      refreshInputActivity();
+    },
+    [isSpectator, isTouchDevice, refreshInputActivity]
+  );
+
+  const setTargetFromDirection = useCallback((direction, dt) => {
     const state = inputStateRef.current;
-    if (Math.abs(normalized - state.targetNorm) < 0.0002) {
+    if (direction === 0) {
       return;
     }
-    state.targetNorm = normalized;
-    const control = localControlRef.current;
-    control.targetNorm = normalized;
-    control.lastInputAt = Number.isFinite(timestamp)
-      ? timestamp
-      : typeof performance !== "undefined"
-        ? performance.now()
-        : Date.now();
+    const keyboardSpeedNormPerSec = 0.95;
+    state.targetNorm = clamp(state.targetNorm + direction * keyboardSpeedNormPerSec * dt, 0, 1);
   }, []);
 
   const emitInputCommand = useCallback((payload, sentAt) => {
@@ -163,113 +179,6 @@ export default function GameScreen({
     sendInputRef.current(packet);
   }, []);
 
-  const clearTouchTarget = useCallback(() => {
-    const swipe = swipeRef.current;
-    swipe.active = false;
-    swipe.pointerId = null;
-    markLocalInput(false);
-  }, [markLocalInput]);
-
-  const handleArenaPointerDown = useCallback(
-    (event) => {
-      if (isSpectator) {
-        return;
-      }
-      if (event.pointerType === "mouse" && event.button !== 0) {
-        return;
-      }
-      const rect = event.currentTarget.getBoundingClientRect();
-      const normalized = clamp((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
-      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-      keysRef.current = Object.create(null);
-      const swipe = swipeRef.current;
-      swipe.active = true;
-      swipe.pointerId = event.pointerId;
-      swipe.smoothedNorm = normalized;
-
-      if (event.currentTarget.setPointerCapture) {
-        try {
-          event.currentTarget.setPointerCapture(event.pointerId);
-        } catch (_error) {
-          // Ignore pointer capture failures in older browsers.
-        }
-      }
-
-      setTouchTarget(normalized, now);
-      markLocalInput(true, now);
-      event.preventDefault();
-    },
-    [isSpectator, markLocalInput, setTouchTarget]
-  );
-
-  const handleArenaPointerMove = useCallback(
-    (event) => {
-      if (isSpectator) {
-        return;
-      }
-      const swipe = swipeRef.current;
-      if (!swipe.active || swipe.pointerId !== event.pointerId) {
-        return;
-      }
-      const rect = event.currentTarget.getBoundingClientRect();
-      const normalized = clamp((event.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
-      const distance = Math.abs(normalized - swipe.smoothedNorm);
-      const alpha = distance > 0.1 ? 0.82 : distance > 0.035 ? 0.7 : 0.56;
-      const smoothed = clamp(lerp(swipe.smoothedNorm, normalized, alpha), 0, 1);
-      const now = typeof performance !== "undefined" ? performance.now() : Date.now();
-
-      swipe.smoothedNorm = smoothed;
-      setTouchTarget(smoothed, now);
-      markLocalInput(true, now);
-      event.preventDefault();
-    },
-    [isSpectator, markLocalInput, setTouchTarget]
-  );
-
-  const handleArenaPointerUp = useCallback(
-    (event) => {
-      if (isSpectator) {
-        return;
-      }
-      const swipe = swipeRef.current;
-      if (!swipe.active || swipe.pointerId !== event.pointerId) {
-        return;
-      }
-      if (event.currentTarget.releasePointerCapture) {
-        try {
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        } catch (_error) {
-          // Ignore pointer release failures in older browsers.
-        }
-      }
-      clearTouchTarget();
-    },
-    [clearTouchTarget, isSpectator]
-  );
-
-  const handleArenaPointerCancel = useCallback(
-    (event) => {
-      if (isSpectator) {
-        return;
-      }
-      const swipe = swipeRef.current;
-      if (!swipe.active || swipe.pointerId !== event.pointerId) {
-        return;
-      }
-      clearTouchTarget();
-    },
-    [clearTouchTarget, isSpectator]
-  );
-
-  useEffect(() => {
-    if (!isTouchDevice) {
-      return;
-    }
-    return () => {
-      clearTouchTarget();
-    };
-  }, [clearTouchTarget, isTouchDevice]);
-
   useEffect(() => {
     if (isSpectator) {
       return undefined;
@@ -306,9 +215,6 @@ export default function GameScreen({
       const control = localControlRef.current;
       control.direction = 0;
       control.inputActive = false;
-      const swipe = swipeRef.current;
-      swipe.active = false;
-      swipe.pointerId = null;
     };
 
     window.addEventListener("keydown", onKeyDown);
@@ -329,7 +235,6 @@ export default function GameScreen({
 
     let rafId = 0;
     let lastTime = performance.now();
-    const keyboardSpeedNormPerSec = 0.95;
 
     const loop = (now) => {
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
@@ -340,22 +245,19 @@ export default function GameScreen({
       const direction = up === down ? 0 : up ? -1 : 1;
 
       const state = inputStateRef.current;
-      if (direction !== 0) {
-        state.targetNorm = clamp(state.targetNorm + direction * keyboardSpeedNormPerSec * dt, 0, 1);
-      }
+      setTargetFromDirection(direction, dt);
 
       const control = localControlRef.current;
-      const swipeActive = swipeRef.current.active;
       control.direction = direction;
       control.targetNorm = state.targetNorm;
-      control.inputActive = swipeActive || direction !== 0;
+      control.inputActive = direction !== 0;
       if (control.inputActive) {
         control.lastInputAt = now;
       }
 
       const directionChanged = direction !== state.lastSentDirection;
-      const sendInterval = swipeActive ? 12 : direction !== 0 ? 14 : 40;
-      const normDeltaThreshold = swipeActive ? 0.0008 : 0.0018;
+      const sendInterval = direction !== 0 ? 14 : 40;
+      const normDeltaThreshold = 0.0018;
       if (
         state.lastSentNorm === null ||
         Math.abs(state.targetNorm - state.lastSentNorm) > normDeltaThreshold ||
@@ -383,12 +285,9 @@ export default function GameScreen({
       control.inputActive = false;
       control.lastInputAt = 0;
       control.pendingInputs = [];
-      const swipe = swipeRef.current;
-      swipe.active = false;
-      swipe.pointerId = null;
       emitInputCommand({ direction: 0, targetY: null }, performance.now());
     };
-  }, [emitInputCommand, isSpectator]);
+  }, [emitInputCommand, isSpectator, setTargetFromDirection]);
 
   const activeEffects = useMemo(() => {
     if (!localPlayer) {
@@ -457,11 +356,7 @@ export default function GameScreen({
         <div className="grid gap-3 lg:grid-cols-[1fr,290px]">
           <div
             className="relative h-[64vh] min-h-[300px] select-none sm:min-h-[360px] md:h-[72vh]"
-            style={{ touchAction: isSpectator ? "auto" : "none" }}
-            onPointerDown={isSpectator || !isTouchDevice ? undefined : handleArenaPointerDown}
-            onPointerMove={isSpectator || !isTouchDevice ? undefined : handleArenaPointerMove}
-            onPointerUp={isSpectator || !isTouchDevice ? undefined : handleArenaPointerUp}
-            onPointerCancel={isSpectator || !isTouchDevice ? undefined : handleArenaPointerCancel}
+            style={{ touchAction: "auto" }}
           >
             <GameCanvas
               room={room}
@@ -490,8 +385,33 @@ export default function GameScreen({
             </AnimatePresence>
 
             {!isSpectator && isTouchDevice && (
-              <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-cyan-200/30 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-100/90">
-                Drag anywhere to move paddle
+              <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+                <button
+                  type="button"
+                  className="rounded-lg border border-cyan-200/40 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 active:scale-[0.98]"
+                  onPointerDown={(event) => handleMobileHoldStart(-1, event)}
+                  onPointerUp={(event) => handleMobileHoldEnd(-1, event)}
+                  onPointerCancel={(event) => handleMobileHoldEnd(-1, event)}
+                  onPointerLeave={(event) => handleMobileHoldEnd(-1, event)}
+                  onTouchStart={(event) => handleMobileHoldStart(-1, event)}
+                  onTouchEnd={(event) => handleMobileHoldEnd(-1, event)}
+                  onTouchCancel={(event) => handleMobileHoldEnd(-1, event)}
+                >
+                  Up
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-cyan-200/40 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 active:scale-[0.98]"
+                  onPointerDown={(event) => handleMobileHoldStart(1, event)}
+                  onPointerUp={(event) => handleMobileHoldEnd(1, event)}
+                  onPointerCancel={(event) => handleMobileHoldEnd(1, event)}
+                  onPointerLeave={(event) => handleMobileHoldEnd(1, event)}
+                  onTouchStart={(event) => handleMobileHoldStart(1, event)}
+                  onTouchEnd={(event) => handleMobileHoldEnd(1, event)}
+                  onTouchCancel={(event) => handleMobileHoldEnd(1, event)}
+                >
+                  Down
+                </button>
               </div>
             )}
 
