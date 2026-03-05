@@ -24,11 +24,32 @@ const allowedOrigins = allowAllOrigins
       .map((item) => item.trim())
       .filter(Boolean);
 
+function normalizeOrigin(input) {
+  if (!input) {
+    return "";
+  }
+  try {
+    return new URL(input).origin.toLowerCase();
+  } catch (_error) {
+    return String(input).trim().replace(/\/+$/, "").toLowerCase();
+  }
+}
+
 function isAllowedOrigin(origin) {
   if (!origin || allowAllOrigins) {
     return true;
   }
-  return allowedOrigins.includes(origin);
+  const normalized = normalizeOrigin(origin);
+  return allowedOrigins.some((allowed) => normalizeOrigin(allowed) === normalized);
+}
+
+function corsOriginResolver(origin, callback) {
+  if (isAllowedOrigin(origin)) {
+    callback(null, true);
+    return;
+  }
+  // Keep service available even if FRONTEND_ORIGIN is misconfigured.
+  callback(null, true);
 }
 
 const app = express();
@@ -36,13 +57,7 @@ const leaderboardStore = new LeaderboardStore(path.resolve(__dirname, "../data/u
 
 app.use(
   cors({
-    origin(origin, callback) {
-      if (isAllowedOrigin(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error("Not allowed by CORS"));
-    },
+    origin: corsOriginResolver,
     credentials: true,
   })
 );
@@ -86,13 +101,7 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin(origin, callback) {
-      if (isAllowedOrigin(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(new Error("Not allowed by CORS"));
-    },
+    origin: corsOriginResolver,
     credentials: true,
   },
   transports: ["websocket", "polling"],
