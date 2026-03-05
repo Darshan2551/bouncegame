@@ -13,12 +13,21 @@ function roundedRect(ctx, x, y, width, height, radius) {
   ctx.closePath();
 }
 
+function lerp(from, to, alpha) {
+  return from + (to - from) * alpha;
+}
+
 export default function GameCanvas({ room, playerId }) {
   const canvasRef = useRef(null);
   const stateRef = useRef(room);
   const particlesRef = useRef([]);
   const impactIdRef = useRef(null);
   const lastFrameRef = useRef(performance.now());
+  const renderStateRef = useRef({
+    initialized: false,
+    ball: { x: 0, y: 0 },
+    players: new Map(),
+  });
 
   useEffect(() => {
     stateRef.current = room;
@@ -80,6 +89,50 @@ export default function GameCanvas({ room, playerId }) {
 
       const dt = Math.min(0.032, (frameTs - lastFrameRef.current) / 1000);
       lastFrameRef.current = frameTs;
+      const paddleAlpha = Math.min(1, dt * 14);
+      const ballAlpha = Math.min(1, dt * 16);
+
+      const renderState = renderStateRef.current;
+      if (!renderState.initialized) {
+        renderState.initialized = true;
+        renderState.ball.x = state.ball.x;
+        renderState.ball.y = state.ball.y;
+        renderState.players = new Map(
+          state.players.map((player) => [player.id, { x: player.paddle.x, y: player.paddle.y }])
+        );
+      } else {
+        const nextPlayers = new Map();
+        for (const player of state.players) {
+          const prev = renderState.players.get(player.id) || {
+            x: player.paddle.x,
+            y: player.paddle.y,
+          };
+
+          if (
+            Math.abs(prev.x - player.paddle.x) > 260 ||
+            Math.abs(prev.y - player.paddle.y) > 260
+          ) {
+            prev.x = player.paddle.x;
+            prev.y = player.paddle.y;
+          } else {
+            prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
+            prev.y = lerp(prev.y, player.paddle.y, paddleAlpha);
+          }
+          nextPlayers.set(player.id, prev);
+        }
+        renderState.players = nextPlayers;
+
+        if (
+          Math.abs(renderState.ball.x - state.ball.x) > 340 ||
+          Math.abs(renderState.ball.y - state.ball.y) > 220
+        ) {
+          renderState.ball.x = state.ball.x;
+          renderState.ball.y = state.ball.y;
+        } else {
+          renderState.ball.x = lerp(renderState.ball.x, state.ball.x, ballAlpha);
+          renderState.ball.y = lerp(renderState.ball.y, state.ball.y, ballAlpha);
+        }
+      }
 
       const bg = ctx.createLinearGradient(0, 0, containerWidth, containerHeight);
       bg.addColorStop(0, "#030912");
@@ -134,8 +187,9 @@ export default function GameCanvas({ room, playerId }) {
 
       for (const player of state.players) {
         const style = PADDLE_STYLES[player.paddleStyle] || PADDLE_STYLES["Neon Paddle"];
-        const px = toX(player.paddle.x - player.paddle.width / 2);
-        const py = toY(player.paddle.y - player.paddle.height / 2);
+        const smoothed = renderState.players.get(player.id) || player.paddle;
+        const px = toX(smoothed.x - player.paddle.width / 2);
+        const py = toY(smoothed.y - player.paddle.height / 2);
         const pw = toX(player.paddle.width);
         const ph = toY(player.paddle.height);
 
@@ -208,8 +262,8 @@ export default function GameCanvas({ room, playerId }) {
       }
 
       const ball = state.ball;
-      const bx = toX(ball.x);
-      const by = toY(ball.y);
+      const bx = toX(renderState.ball.x);
+      const by = toY(renderState.ball.y);
       const br = ball.radius * ((scaleX + scaleY) / 2);
 
       ctx.save();

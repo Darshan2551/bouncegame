@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 function useTouchDevice() {
   return useMemo(() => {
@@ -15,6 +15,7 @@ function useTouchDevice() {
 export default function MobileControls({ onDirection, onTargetY }) {
   const isTouchDevice = useTouchDevice();
   const [active, setActive] = useState(0);
+  const draggingRef = useRef(false);
 
   if (!isTouchDevice) {
     return null;
@@ -31,24 +32,47 @@ export default function MobileControls({ onDirection, onTargetY }) {
     onTargetY(Math.max(0, Math.min(1, ratio)));
   };
 
+  const handlePointerDown = (event) => {
+    draggingRef.current = true;
+    if (event.currentTarget.setPointerCapture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    updateTarget(event);
+  };
+
+  const handlePointerMove = (event) => {
+    if (!draggingRef.current) {
+      return;
+    }
+    updateTarget(event);
+  };
+
+  const handlePointerEnd = (event) => {
+    if (event.currentTarget.releasePointerCapture && event.pointerId !== undefined) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch (_error) {
+        // ignore if pointer already released
+      }
+    }
+    draggingRef.current = false;
+    onTargetY(null);
+  };
+
   return (
     <div className="grid gap-3 md:hidden" style={{ touchAction: "none" }}>
       <div
         className="neon-panel relative h-32 rounded-xl select-none"
         style={{ touchAction: "none" }}
-        onPointerDown={updateTarget}
-        onPointerMove={(event) => {
-          if (event.buttons > 0) {
-            updateTarget(event);
-          }
-        }}
-        onPointerUp={() => onTargetY(null)}
-        onPointerCancel={() => onTargetY(null)}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerEnd}
+        onPointerCancel={handlePointerEnd}
         onTouchStart={updateTarget}
         onTouchMove={updateTarget}
-        onTouchEnd={() => onTargetY(null)}
+        onTouchEnd={handlePointerEnd}
       >
-        <div className="absolute inset-0 flex items-center justify-center text-xs uppercase tracking-[0.2em] text-slate-300">
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs uppercase tracking-[0.2em] text-slate-300">
           Slide to move
         </div>
       </div>

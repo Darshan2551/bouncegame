@@ -101,7 +101,7 @@ export default function GameScreen({
       if (directionRef.current !== 0) {
         onSendInput({ direction: directionRef.current });
       }
-    }, 45);
+    }, 24);
     return () => clearInterval(timer);
   }, [isSpectator, onSendInput]);
 
