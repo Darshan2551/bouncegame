@@ -945,11 +945,16 @@ class ArenaServer {
       speed *= AI_DIFFICULTY[player.ai.difficulty]?.speedScale || 1;
     }
 
-    if (player.paddle.targetY !== null && now - player.paddle.lastInputAt <= 140) {
-      const target = player.paddle.targetY * ARENA_HEIGHT;
+    if (player.paddle.targetY !== null && now - player.paddle.lastInputAt <= 220) {
+      const target = clamp(
+        player.paddle.targetY * ARENA_HEIGHT,
+        player.paddle.height / 2,
+        ARENA_HEIGHT - player.paddle.height / 2
+      );
       const delta = target - player.paddle.y;
-      const step = clamp(delta, -speed * dt, speed * dt);
-      player.paddle.y += step;
+      const easedStep = delta * Math.min(1, dt * 16);
+      const maxStep = speed * dt;
+      player.paddle.y += clamp(easedStep, -maxStep, maxStep);
     } else {
       player.paddle.y += player.paddle.inputDir * speed * dt;
     }

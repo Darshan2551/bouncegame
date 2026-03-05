@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 
 import { PADDLE_STYLES, POWERUP_BADGES } from "../lib/constants";
-const BASE_PADDLE_SPEED = 540;
 
 function roundedRect(ctx, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
@@ -56,7 +55,7 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
         life: 0.7 + Math.random() * 0.4,
       });
     }
-    shakeRef.current.magnitude = Math.max(shakeRef.current.magnitude, 6.5);
+    shakeRef.current.magnitude = Math.max(shakeRef.current.magnitude, 3);
   }, [room?.lastImpact]);
 
   useEffect(() => {
@@ -105,7 +104,10 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
         renderState.ball.x = state.ball.x;
         renderState.ball.y = state.ball.y;
         renderState.players = new Map(
-          state.players.map((player) => [player.id, { x: player.paddle.x, y: player.paddle.y, vy: 0 }])
+          state.players.map((player) => [
+            player.id,
+            { x: player.paddle.x, y: player.paddle.y, targetY: player.paddle.y },
+          ])
         );
       } else {
         const nextPlayers = new Map();
@@ -113,53 +115,47 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
           const prev = renderState.players.get(player.id) || {
             x: player.paddle.x,
             y: player.paddle.y,
-            vy: 0,
+            targetY: player.paddle.y,
           };
           const isLocal = player.id === playerId && localControlRef?.current && !player.isBot;
           const jumped =
             Math.abs(prev.x - player.paddle.x) > 260 || Math.abs(prev.y - player.paddle.y) > 260;
+          const halfHeight = player.paddle.height / 2;
+          const limitTop = halfHeight;
+          const limitBottom = arena.height - halfHeight;
+          const authoritativeY = clamp(player.paddle.y, limitTop, limitBottom);
 
           if (jumped) {
             prev.x = player.paddle.x;
-            prev.y = player.paddle.y;
-            prev.vy = 0;
-          } else if (isLocal && (state.status === "live" || state.status === "countdown")) {
-            const input = localControlRef.current;
-            const speedBoosted = (player.effects?.speedBoostMs || 0) > 0;
-            const frozen = (player.effects?.freezeMs || 0) > 0;
-            let speed = BASE_PADDLE_SPEED;
-            if (speedBoosted) {
-              speed *= 1.45;
-            }
-
-            if (frozen) {
-              prev.vy = lerp(prev.vy || 0, 0, Math.min(1, dt * 26));
-            } else {
-              const targetVy = clamp(Number(input.direction || 0), -1, 1) * speed;
-              prev.vy = lerp(prev.vy || 0, targetVy, Math.min(1, dt * 28));
-              prev.y += prev.vy * dt;
-
-              if (typeof input.touchTarget === "number") {
-                const touchTargetY = clamp(input.touchTarget, 0, 1) * arena.height;
-                prev.y = lerp(prev.y, touchTargetY, Math.min(1, dt * 22));
+            prev.y = authoritativeY;
+            prev.targetY = authoritativeY;
+          } else {
+            let desiredTargetY = authoritativeY;
+            if (isLocal && (state.status === "live" || state.status === "countdown")) {
+              const localNorm = Number(localControlRef.current.targetNorm);
+              if (Number.isFinite(localNorm)) {
+                desiredTargetY = clamp(localNorm, 0, 1) * arena.height;
+                desiredTargetY = clamp(desiredTargetY, limitTop, limitBottom);
               }
             }
 
-            const halfHeight = player.paddle.height / 2;
-            prev.y = clamp(prev.y, halfHeight, arena.height - halfHeight);
+            const targetAlpha = Math.min(1, dt * 24);
+            const moveAlpha = Math.min(1, dt * 18);
+            prev.targetY = lerp(prev.targetY, desiredTargetY, targetAlpha);
+            prev.y = lerp(prev.y, prev.targetY, moveAlpha);
             prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
 
-            const reconciliation = Math.abs(player.paddle.y - prev.y);
-            if (reconciliation > 120) {
-              prev.y = player.paddle.y;
-              prev.vy = 0;
+            const correctionAlpha = isLocal ? Math.min(1, dt * 6) : Math.min(1, dt * 11);
+            const correctionGap = authoritativeY - prev.y;
+            if (Math.abs(correctionGap) > 130) {
+              prev.y = authoritativeY;
+              prev.targetY = authoritativeY;
             } else {
-              prev.y = lerp(prev.y, player.paddle.y, Math.min(1, dt * 10));
+              prev.y += correctionGap * correctionAlpha;
             }
-          } else {
-            prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
-            prev.y = lerp(prev.y, player.paddle.y, paddleAlpha);
-            prev.vy = 0;
+
+            prev.y = clamp(prev.y, limitTop, limitBottom);
+            prev.targetY = clamp(prev.targetY, limitTop, limitBottom);
           }
           nextPlayers.set(player.id, prev);
         }

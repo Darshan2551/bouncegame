@@ -17,10 +17,6 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
-function lerp(from, to, alpha) {
-  return from + (to - from) * alpha;
-}
-
 export default function GameScreen({
   room,
   playerId,
@@ -33,16 +29,13 @@ export default function GameScreen({
   onLeave,
 }) {
   const keysRef = useRef(Object.create(null));
-  const swipeRef = useRef({ active: false, startY: 0, virtualNorm: 0.5 });
+  const swipeRef = useRef({ active: false, startY: 0 });
   const inputStateRef = useRef({
-    velocity: 0,
-    touchTarget: null,
-    lastDirectionSentAt: 0,
+    targetNorm: 0.5,
     lastTargetSentAt: 0,
-    lastSentDirection: 0,
-    lastSentTarget: null,
+    lastSentNorm: null,
   });
-  const localControlRef = useRef({ direction: 0, touchTarget: null });
+  const localControlRef = useRef({ targetNorm: 0.5, direction: 0 });
   const sendInputRef = useRef(onSendInput);
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
@@ -63,29 +56,29 @@ export default function GameScreen({
   }, [onSendInput]);
 
   useEffect(() => {
-    if (!localPlayer || !room?.arena?.height) {
+    if (!localPlayer || !room?.arena?.height || isSpectator) {
       return;
     }
-    if (inputStateRef.current.touchTarget !== null) {
+    const hasKeyboardInput =
+      Boolean(keysRef.current.w || keysRef.current.arrowup) ||
+      Boolean(keysRef.current.s || keysRef.current.arrowdown);
+    if (swipeRef.current.active || hasKeyboardInput) {
       return;
     }
     const nextNorm = clamp(localPlayer.paddle.y / room.arena.height, 0, 1);
-    swipeRef.current.virtualNorm = nextNorm;
-    localControlRef.current.touchTarget = null;
-  }, [localPlayer, room?.arena?.height]);
+    inputStateRef.current.targetNorm = nextNorm;
+    localControlRef.current.targetNorm = nextNorm;
+  }, [isSpectator, localPlayer, room?.arena?.height]);
 
   const setTouchTarget = useCallback((nextValue) => {
     const normalized = clamp(nextValue, 0, 1);
-    swipeRef.current.virtualNorm = normalized;
-    inputStateRef.current.touchTarget = normalized;
-    localControlRef.current.touchTarget = normalized;
+    inputStateRef.current.targetNorm = normalized;
+    localControlRef.current.targetNorm = normalized;
   }, []);
 
   const clearTouchTarget = useCallback(() => {
     swipeRef.current.active = false;
     swipeRef.current.startY = 0;
-    inputStateRef.current.touchTarget = null;
-    localControlRef.current.touchTarget = null;
   }, []);
 
   const handleArenaTouchStart = useCallback(
@@ -100,7 +93,6 @@ export default function GameScreen({
       const rect = event.currentTarget.getBoundingClientRect();
       const normalized = clamp((touch.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
       keysRef.current = Object.create(null);
-      inputStateRef.current.velocity = 0;
       swipeRef.current.active = true;
       swipeRef.current.startY = touch.clientY;
       setTouchTarget(normalized);
@@ -120,8 +112,9 @@ export default function GameScreen({
       }
       const rect = event.currentTarget.getBoundingClientRect();
       const delta = touch.clientY - swipeRef.current.startY;
-      const sensitivity = 1.18 / Math.max(rect.height, 1);
-      const nextNorm = swipeRef.current.virtualNorm + delta * sensitivity;
+      const currentNorm = inputStateRef.current.targetNorm;
+      const sensitivity = 1.08 / Math.max(rect.height, 1);
+      const nextNorm = currentNorm + delta * sensitivity;
       swipeRef.current.startY = touch.clientY;
       setTouchTarget(nextNorm);
       event.preventDefault();
@@ -169,7 +162,6 @@ export default function GameScreen({
 
     const onBlur = () => {
       keysRef.current = Object.create(null);
-      inputStateRef.current.velocity = 0;
       localControlRef.current.direction = 0;
     };
 
@@ -191,6 +183,7 @@ export default function GameScreen({
 
     let rafId = 0;
     let lastTime = performance.now();
+    const keyboardSpeedNormPerSec = 0.95;
 
     const loop = (now) => {
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
@@ -198,45 +191,25 @@ export default function GameScreen({
 
       const up = Boolean(keysRef.current.w || keysRef.current.arrowup);
       const down = Boolean(keysRef.current.s || keysRef.current.arrowdown);
-      const desired = up === down ? 0 : up ? -1 : 1;
+      const direction = up === down ? 0 : up ? -1 : 1;
 
       const state = inputStateRef.current;
-      if (desired !== 0) {
-        state.velocity = desired;
-      } else {
-        state.velocity = lerp(state.velocity, 0, Math.min(1, 16 * dt));
+      if (direction !== 0) {
+        state.targetNorm = clamp(state.targetNorm + direction * keyboardSpeedNormPerSec * dt, 0, 1);
       }
-      if (desired === 0 && Math.abs(state.velocity) < 0.01) {
-        state.velocity = 0;
-      }
-      const direction = clamp(state.velocity, -1, 1);
 
       localControlRef.current.direction = direction;
-      localControlRef.current.touchTarget = state.touchTarget;
+      localControlRef.current.targetNorm = state.targetNorm;
 
+      const sendInterval = direction !== 0 || swipeRef.current.active ? 16 : 45;
       if (
-        Math.abs(direction - state.lastSentDirection) > 0.02 ||
-        now - state.lastDirectionSentAt >= 22
+        state.lastSentNorm === null ||
+        Math.abs(state.targetNorm - state.lastSentNorm) > 0.002 ||
+        now - state.lastTargetSentAt >= sendInterval
       ) {
-        state.lastSentDirection = direction;
-        state.lastDirectionSentAt = now;
-        sendInputRef.current({ direction });
-      }
-
-      if (typeof state.touchTarget === "number") {
-        if (
-          state.lastSentTarget === null ||
-          Math.abs(state.touchTarget - state.lastSentTarget) > 0.005 ||
-          now - state.lastTargetSentAt >= 28
-        ) {
-          state.lastSentTarget = state.touchTarget;
-          state.lastTargetSentAt = now;
-          sendInputRef.current({ targetY: state.touchTarget });
-        }
-      } else if (state.lastSentTarget !== null) {
-        state.lastSentTarget = null;
+        state.lastSentNorm = state.targetNorm;
         state.lastTargetSentAt = now;
-        sendInputRef.current({ targetY: null });
+        sendInputRef.current({ direction, targetY: state.targetNorm });
       }
 
       rafId = requestAnimationFrame(loop);
@@ -246,14 +219,9 @@ export default function GameScreen({
     return () => {
       cancelAnimationFrame(rafId);
       const state = inputStateRef.current;
-      state.velocity = 0;
-      state.touchTarget = null;
-      state.lastSentDirection = 0;
-      state.lastSentTarget = null;
-      state.lastDirectionSentAt = 0;
+      state.lastSentNorm = null;
       state.lastTargetSentAt = 0;
       localControlRef.current.direction = 0;
-      localControlRef.current.touchTarget = null;
       sendInputRef.current({ direction: 0, targetY: null });
     };
   }, [isSpectator]);
