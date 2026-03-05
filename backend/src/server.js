@@ -15,15 +15,34 @@ const PORT = Number(process.env.PORT || 4000);
 const WINNING_SCORE_DEFAULT = Number(process.env.WINNING_SCORE_DEFAULT || 10);
 const SERVE_STATIC = String(process.env.SERVE_STATIC || "false").toLowerCase() === "true";
 
-const frontendOrigin = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
-const allowedOrigins = frontendOrigin === "*" ? true : frontendOrigin.split(",").map((item) => item.trim());
+const frontendOrigin = process.env.FRONTEND_ORIGIN || "*";
+const allowAllOrigins = frontendOrigin === "*";
+const allowedOrigins = allowAllOrigins
+  ? []
+  : frontendOrigin
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+function isAllowedOrigin(origin) {
+  if (!origin || allowAllOrigins) {
+    return true;
+  }
+  return allowedOrigins.includes(origin);
+}
 
 const app = express();
 const leaderboardStore = new LeaderboardStore(path.resolve(__dirname, "../data/users.json"));
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   })
 );
@@ -67,7 +86,13 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin(origin, callback) {
+      if (isAllowedOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
     credentials: true,
   },
   transports: ["websocket", "polling"],

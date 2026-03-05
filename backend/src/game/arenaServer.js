@@ -236,7 +236,7 @@ class ArenaServer {
     });
 
     socket.emit("room_joined", {
-      code: roomCode,
+      code: room.code,
       playerId: joined.id,
       spectator: false,
       room: this.serializeRoom(room),

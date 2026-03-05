@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import GameCanvas from "./GameCanvas";
@@ -27,9 +27,22 @@ export default function GameScreen({
 }) {
   const [direction, setDirection] = useState(0);
   const keyStateRef = useRef({ up: false, down: false });
+  const directionRef = useRef(0);
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
   const rage = localPlayer?.energy || 0;
+
+  const applyDirection = useCallback(
+    (nextDirection) => {
+      if (directionRef.current === nextDirection) {
+        return;
+      }
+      directionRef.current = nextDirection;
+      setDirection(nextDirection);
+      onSendInput({ direction: nextDirection });
+    },
+    [onSendInput]
+  );
 
   useEffect(() => {
     if (isSpectator) {
@@ -40,7 +53,7 @@ export default function GameScreen({
       const up = keyStateRef.current.up;
       const down = keyStateRef.current.down;
       const nextDirection = up === down ? 0 : up ? -1 : 1;
-      setDirection(nextDirection);
+      applyDirection(nextDirection);
     };
 
     const onKeyDown = (event) => {
@@ -78,14 +91,19 @@ export default function GameScreen({
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [isSpectator, onActivateUltimate]);
+  }, [applyDirection, isSpectator, onActivateUltimate]);
 
   useEffect(() => {
     if (isSpectator) {
       return;
     }
-    onSendInput({ direction });
-  }, [direction, isSpectator, onSendInput]);
+    const timer = setInterval(() => {
+      if (directionRef.current !== 0) {
+        onSendInput({ direction: directionRef.current });
+      }
+    }, 45);
+    return () => clearInterval(timer);
+  }, [isSpectator, onSendInput]);
 
   const activeEffects = useMemo(() => {
     if (!localPlayer) {
@@ -255,7 +273,7 @@ export default function GameScreen({
 
             {!isSpectator && (
               <MobileControls
-                onDirection={(value) => setDirection(value)}
+                onDirection={(value) => applyDirection(value)}
                 onTargetY={(value) => onSendInput({ targetY: value })}
               />
             )}
