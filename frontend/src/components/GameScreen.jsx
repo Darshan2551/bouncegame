@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import GameCanvas from "./GameCanvas";
 import ReactionPad from "./ReactionPad";
-import MobileControls from "./MobileControls";
 import EndGameOverlay from "./EndGameOverlay";
 import { POWERUP_BADGES } from "../lib/constants";
 
@@ -12,6 +11,14 @@ function formatTimer(ms) {
   const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
   const seconds = String(totalSeconds % 60).padStart(2, "0");
   return `${minutes}:${seconds}`;
+}
+
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function lerp(from, to, alpha) {
+  return from + (to - from) * alpha;
 }
 
 export default function GameScreen({
@@ -25,46 +32,124 @@ export default function GameScreen({
   onReturnLobby,
   onLeave,
 }) {
-  const [direction, setDirection] = useState(0);
-  const keyStateRef = useRef({ up: false, down: false });
-  const directionRef = useRef(0);
+  const keysRef = useRef(Object.create(null));
+  const swipeRef = useRef({ active: false, startY: 0, virtualNorm: 0.5 });
+  const inputStateRef = useRef({
+    velocity: 0,
+    touchTarget: null,
+    lastDirectionSentAt: 0,
+    lastTargetSentAt: 0,
+    lastSentDirection: 0,
+    lastSentTarget: null,
+  });
+  const localControlRef = useRef({ direction: 0, touchTarget: null });
+  const sendInputRef = useRef(onSendInput);
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
   const rage = localPlayer?.energy || 0;
+  const isTouchDevice = useMemo(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return (
+      (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) ||
+      navigator.maxTouchPoints > 0 ||
+      "ontouchstart" in window
+    );
+  }, []);
 
-  const applyDirection = useCallback(
-    (nextDirection) => {
-      if (directionRef.current === nextDirection) {
+  useEffect(() => {
+    sendInputRef.current = onSendInput;
+  }, [onSendInput]);
+
+  useEffect(() => {
+    if (!localPlayer || !room?.arena?.height) {
+      return;
+    }
+    if (inputStateRef.current.touchTarget !== null) {
+      return;
+    }
+    const nextNorm = clamp(localPlayer.paddle.y / room.arena.height, 0, 1);
+    swipeRef.current.virtualNorm = nextNorm;
+    localControlRef.current.touchTarget = null;
+  }, [localPlayer, room?.arena?.height]);
+
+  const setTouchTarget = useCallback((nextValue) => {
+    const normalized = clamp(nextValue, 0, 1);
+    swipeRef.current.virtualNorm = normalized;
+    inputStateRef.current.touchTarget = normalized;
+    localControlRef.current.touchTarget = normalized;
+  }, []);
+
+  const clearTouchTarget = useCallback(() => {
+    swipeRef.current.active = false;
+    swipeRef.current.startY = 0;
+    inputStateRef.current.touchTarget = null;
+    localControlRef.current.touchTarget = null;
+  }, []);
+
+  const handleArenaTouchStart = useCallback(
+    (event) => {
+      if (isSpectator) {
         return;
       }
-      directionRef.current = nextDirection;
-      setDirection(nextDirection);
-      onSendInput({ direction: nextDirection });
+      const touch = event.touches?.[0];
+      if (!touch) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const normalized = clamp((touch.clientY - rect.top) / Math.max(rect.height, 1), 0, 1);
+      keysRef.current = Object.create(null);
+      inputStateRef.current.velocity = 0;
+      swipeRef.current.active = true;
+      swipeRef.current.startY = touch.clientY;
+      setTouchTarget(normalized);
+      event.preventDefault();
     },
-    [onSendInput]
+    [isSpectator, setTouchTarget]
   );
+
+  const handleArenaTouchMove = useCallback(
+    (event) => {
+      if (isSpectator) {
+        return;
+      }
+      const touch = event.touches?.[0];
+      if (!touch || !swipeRef.current.active) {
+        return;
+      }
+      const rect = event.currentTarget.getBoundingClientRect();
+      const delta = touch.clientY - swipeRef.current.startY;
+      const sensitivity = 1.18 / Math.max(rect.height, 1);
+      const nextNorm = swipeRef.current.virtualNorm + delta * sensitivity;
+      swipeRef.current.startY = touch.clientY;
+      setTouchTarget(nextNorm);
+      event.preventDefault();
+    },
+    [isSpectator, setTouchTarget]
+  );
+
+  const handleArenaTouchEnd = useCallback(() => {
+    if (isSpectator) {
+      return;
+    }
+    clearTouchTarget();
+  }, [clearTouchTarget, isSpectator]);
 
   useEffect(() => {
     if (isSpectator) {
       return undefined;
     }
 
-    const syncDirection = () => {
-      const up = keyStateRef.current.up;
-      const down = keyStateRef.current.down;
-      const nextDirection = up === down ? 0 : up ? -1 : 1;
-      applyDirection(nextDirection);
-    };
-
     const onKeyDown = (event) => {
       const key = event.key.toLowerCase();
       if (key === "w" || key === "arrowup") {
-        keyStateRef.current.up = true;
-        syncDirection();
+        keysRef.current[key] = true;
+        event.preventDefault();
       }
       if (key === "s" || key === "arrowdown") {
-        keyStateRef.current.down = true;
-        syncDirection();
+        keysRef.current[key] = true;
+        event.preventDefault();
       }
       if (key === " " || key === "space") {
         event.preventDefault();
@@ -75,35 +160,103 @@ export default function GameScreen({
     const onKeyUp = (event) => {
       const key = event.key.toLowerCase();
       if (key === "w" || key === "arrowup") {
-        keyStateRef.current.up = false;
-        syncDirection();
+        keysRef.current[key] = false;
       }
       if (key === "s" || key === "arrowdown") {
-        keyStateRef.current.down = false;
-        syncDirection();
+        keysRef.current[key] = false;
       }
+    };
+
+    const onBlur = () => {
+      keysRef.current = Object.create(null);
+      inputStateRef.current.velocity = 0;
+      localControlRef.current.direction = 0;
     };
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
 
     return () => {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
-  }, [applyDirection, isSpectator, onActivateUltimate]);
+  }, [isSpectator, onActivateUltimate]);
 
   useEffect(() => {
     if (isSpectator) {
-      return;
+      return undefined;
     }
-    const timer = setInterval(() => {
-      if (directionRef.current !== 0) {
-        onSendInput({ direction: directionRef.current });
+
+    let rafId = 0;
+    let lastTime = performance.now();
+
+    const loop = (now) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
+      lastTime = now;
+
+      const up = Boolean(keysRef.current.w || keysRef.current.arrowup);
+      const down = Boolean(keysRef.current.s || keysRef.current.arrowdown);
+      const desired = up === down ? 0 : up ? -1 : 1;
+
+      const state = inputStateRef.current;
+      if (desired !== 0) {
+        state.velocity = desired;
+      } else {
+        state.velocity = lerp(state.velocity, 0, Math.min(1, 16 * dt));
       }
-    }, 24);
-    return () => clearInterval(timer);
-  }, [isSpectator, onSendInput]);
+      if (desired === 0 && Math.abs(state.velocity) < 0.01) {
+        state.velocity = 0;
+      }
+      const direction = clamp(state.velocity, -1, 1);
+
+      localControlRef.current.direction = direction;
+      localControlRef.current.touchTarget = state.touchTarget;
+
+      if (
+        Math.abs(direction - state.lastSentDirection) > 0.02 ||
+        now - state.lastDirectionSentAt >= 22
+      ) {
+        state.lastSentDirection = direction;
+        state.lastDirectionSentAt = now;
+        sendInputRef.current({ direction });
+      }
+
+      if (typeof state.touchTarget === "number") {
+        if (
+          state.lastSentTarget === null ||
+          Math.abs(state.touchTarget - state.lastSentTarget) > 0.005 ||
+          now - state.lastTargetSentAt >= 28
+        ) {
+          state.lastSentTarget = state.touchTarget;
+          state.lastTargetSentAt = now;
+          sendInputRef.current({ targetY: state.touchTarget });
+        }
+      } else if (state.lastSentTarget !== null) {
+        state.lastSentTarget = null;
+        state.lastTargetSentAt = now;
+        sendInputRef.current({ targetY: null });
+      }
+
+      rafId = requestAnimationFrame(loop);
+    };
+
+    rafId = requestAnimationFrame(loop);
+    return () => {
+      cancelAnimationFrame(rafId);
+      const state = inputStateRef.current;
+      state.velocity = 0;
+      state.touchTarget = null;
+      state.lastSentDirection = 0;
+      state.lastSentTarget = null;
+      state.lastDirectionSentAt = 0;
+      state.lastTargetSentAt = 0;
+      localControlRef.current.direction = 0;
+      localControlRef.current.touchTarget = null;
+      sendInputRef.current({ direction: 0, targetY: null });
+    };
+  }, [isSpectator]);
 
   const activeEffects = useMemo(() => {
     if (!localPlayer) {
@@ -170,8 +323,19 @@ export default function GameScreen({
         </div>
 
         <div className="grid gap-3 lg:grid-cols-[1fr,290px]">
-          <div className="relative h-[60vh] min-h-[380px] md:h-[72vh]">
-            <GameCanvas room={room} playerId={playerId} />
+          <div
+            className="relative h-[60vh] min-h-[380px] select-none md:h-[72vh]"
+            style={{ touchAction: isSpectator ? "auto" : "none" }}
+            onTouchStart={isSpectator ? undefined : handleArenaTouchStart}
+            onTouchMove={isSpectator ? undefined : handleArenaTouchMove}
+            onTouchEnd={isSpectator ? undefined : handleArenaTouchEnd}
+            onTouchCancel={isSpectator ? undefined : handleArenaTouchEnd}
+          >
+            <GameCanvas
+              room={room}
+              playerId={playerId}
+              localControlRef={isSpectator ? null : localControlRef}
+            />
 
             <AnimatePresence>
               {room.status === "countdown" && (
@@ -192,6 +356,12 @@ export default function GameScreen({
                 </motion.div>
               )}
             </AnimatePresence>
+
+            {!isSpectator && isTouchDevice && (
+              <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-cyan-200/30 bg-slate-950/70 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-cyan-100/90">
+                Swipe up/down to move paddle
+              </div>
+            )}
 
             {room.status === "finished" && (
               <EndGameOverlay room={room} onRematch={onRematch} onReturnLobby={onReturnLobby} />
@@ -268,13 +438,6 @@ export default function GameScreen({
                 onSend={(type, value) => {
                   onSendReaction(type, value);
                 }}
-              />
-            )}
-
-            {!isSpectator && (
-              <MobileControls
-                onDirection={(value) => applyDirection(value)}
-                onTargetY={(value) => onSendInput({ targetY: value })}
               />
             )}
           </div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import { PADDLE_STYLES, POWERUP_BADGES } from "../lib/constants";
+const BASE_PADDLE_SPEED = 540;
 
 function roundedRect(ctx, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
@@ -17,11 +18,16 @@ function lerp(from, to, alpha) {
   return from + (to - from) * alpha;
 }
 
-export default function GameCanvas({ room, playerId }) {
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+export default function GameCanvas({ room, playerId, localControlRef = null }) {
   const canvasRef = useRef(null);
   const stateRef = useRef(room);
   const particlesRef = useRef([]);
   const impactIdRef = useRef(null);
+  const shakeRef = useRef({ magnitude: 0 });
   const lastFrameRef = useRef(performance.now());
   const renderStateRef = useRef({
     initialized: false,
@@ -50,6 +56,7 @@ export default function GameCanvas({ room, playerId }) {
         life: 0.7 + Math.random() * 0.4,
       });
     }
+    shakeRef.current.magnitude = Math.max(shakeRef.current.magnitude, 6.5);
   }, [room?.lastImpact]);
 
   useEffect(() => {
@@ -87,10 +94,10 @@ export default function GameCanvas({ room, playerId }) {
       const toX = (value) => value * scaleX;
       const toY = (value) => value * scaleY;
 
-      const dt = Math.min(0.032, (frameTs - lastFrameRef.current) / 1000);
+      const dt = Math.min(0.05, Math.max(0.001, (frameTs - lastFrameRef.current) / 1000));
       lastFrameRef.current = frameTs;
-      const paddleAlpha = Math.min(1, dt * 14);
-      const ballAlpha = Math.min(1, dt * 16);
+      const paddleAlpha = Math.min(1, dt * 17);
+      const ballAlpha = Math.min(1, dt * 20);
 
       const renderState = renderStateRef.current;
       if (!renderState.initialized) {
@@ -98,7 +105,7 @@ export default function GameCanvas({ room, playerId }) {
         renderState.ball.x = state.ball.x;
         renderState.ball.y = state.ball.y;
         renderState.players = new Map(
-          state.players.map((player) => [player.id, { x: player.paddle.x, y: player.paddle.y }])
+          state.players.map((player) => [player.id, { x: player.paddle.x, y: player.paddle.y, vy: 0 }])
         );
       } else {
         const nextPlayers = new Map();
@@ -106,17 +113,53 @@ export default function GameCanvas({ room, playerId }) {
           const prev = renderState.players.get(player.id) || {
             x: player.paddle.x,
             y: player.paddle.y,
+            vy: 0,
           };
+          const isLocal = player.id === playerId && localControlRef?.current && !player.isBot;
+          const jumped =
+            Math.abs(prev.x - player.paddle.x) > 260 || Math.abs(prev.y - player.paddle.y) > 260;
 
-          if (
-            Math.abs(prev.x - player.paddle.x) > 260 ||
-            Math.abs(prev.y - player.paddle.y) > 260
-          ) {
+          if (jumped) {
             prev.x = player.paddle.x;
             prev.y = player.paddle.y;
+            prev.vy = 0;
+          } else if (isLocal && (state.status === "live" || state.status === "countdown")) {
+            const input = localControlRef.current;
+            const speedBoosted = (player.effects?.speedBoostMs || 0) > 0;
+            const frozen = (player.effects?.freezeMs || 0) > 0;
+            let speed = BASE_PADDLE_SPEED;
+            if (speedBoosted) {
+              speed *= 1.45;
+            }
+
+            if (frozen) {
+              prev.vy = lerp(prev.vy || 0, 0, Math.min(1, dt * 26));
+            } else {
+              const targetVy = clamp(Number(input.direction || 0), -1, 1) * speed;
+              prev.vy = lerp(prev.vy || 0, targetVy, Math.min(1, dt * 28));
+              prev.y += prev.vy * dt;
+
+              if (typeof input.touchTarget === "number") {
+                const touchTargetY = clamp(input.touchTarget, 0, 1) * arena.height;
+                prev.y = lerp(prev.y, touchTargetY, Math.min(1, dt * 22));
+              }
+            }
+
+            const halfHeight = player.paddle.height / 2;
+            prev.y = clamp(prev.y, halfHeight, arena.height - halfHeight);
+            prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
+
+            const reconciliation = Math.abs(player.paddle.y - prev.y);
+            if (reconciliation > 120) {
+              prev.y = player.paddle.y;
+              prev.vy = 0;
+            } else {
+              prev.y = lerp(prev.y, player.paddle.y, Math.min(1, dt * 10));
+            }
           } else {
             prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
             prev.y = lerp(prev.y, player.paddle.y, paddleAlpha);
+            prev.vy = 0;
           }
           nextPlayers.set(player.id, prev);
         }
@@ -129,10 +172,22 @@ export default function GameCanvas({ room, playerId }) {
           renderState.ball.x = state.ball.x;
           renderState.ball.y = state.ball.y;
         } else {
-          renderState.ball.x = lerp(renderState.ball.x, state.ball.x, ballAlpha);
-          renderState.ball.y = lerp(renderState.ball.y, state.ball.y, ballAlpha);
+          const projectedX = state.ball.x + state.ball.vx * dt * 0.45;
+          const projectedY = state.ball.y + state.ball.vy * dt * 0.45;
+          renderState.ball.x = lerp(renderState.ball.x, projectedX, ballAlpha);
+          renderState.ball.y = lerp(renderState.ball.y, projectedY, ballAlpha);
         }
       }
+
+      const shake = shakeRef.current;
+      const shakeAmount = shake.magnitude;
+      if (shakeAmount > 0.01) {
+        shake.magnitude *= Math.max(0, 1 - dt * 11);
+      }
+      const shakeX = (Math.random() - 0.5) * shake.magnitude;
+      const shakeY = (Math.random() - 0.5) * shake.magnitude;
+      ctx.save();
+      ctx.translate(shakeX, shakeY);
 
       const bg = ctx.createLinearGradient(0, 0, containerWidth, containerHeight);
       bg.addColorStop(0, "#030912");
@@ -293,13 +348,19 @@ export default function GameCanvas({ room, playerId }) {
         ctx.arc(toX(particle.x), toY(particle.y), 2.6, 0, Math.PI * 2);
         ctx.fill();
       }
+      ctx.restore();
 
       rafId = requestAnimationFrame(draw);
     };
 
     rafId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(rafId);
-  }, [playerId]);
+  }, [localControlRef, playerId]);
 
-  return <canvas ref={canvasRef} className="h-full w-full rounded-2xl border border-cyan-300/20 bg-slate-950" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className="h-full w-full touch-none rounded-2xl border border-cyan-300/20 bg-slate-950"
+    />
+  );
 }
