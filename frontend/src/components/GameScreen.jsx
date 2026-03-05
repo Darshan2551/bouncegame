@@ -35,7 +35,14 @@ export default function GameScreen({
     lastTargetSentAt: 0,
     lastSentNorm: null,
   });
-  const localControlRef = useRef({ targetNorm: 0.5, direction: 0 });
+  const localControlRef = useRef({
+    targetNorm: 0.5,
+    authoritativeNorm: 0.5,
+    direction: 0,
+    nextInputSeq: 1,
+    lastAckSeq: 0,
+    pendingInputs: [],
+  });
   const sendInputRef = useRef(onSendInput);
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
@@ -59,21 +66,67 @@ export default function GameScreen({
     if (!localPlayer || !room?.arena?.height || isSpectator) {
       return;
     }
+
+    const control = localControlRef.current;
+    const authoritativeNorm = clamp(localPlayer.paddle.y / room.arena.height, 0, 1);
+    control.authoritativeNorm = authoritativeNorm;
+
+    const ackSeq = Number(localPlayer.paddle.inputSeq || 0);
+    if (Number.isFinite(ackSeq) && ackSeq >= control.lastAckSeq) {
+      control.lastAckSeq = ackSeq;
+      if (control.pendingInputs.length > 0) {
+        control.pendingInputs = control.pendingInputs.filter((entry) => entry.seq > ackSeq);
+      }
+    }
+
     const hasKeyboardInput =
       Boolean(keysRef.current.w || keysRef.current.arrowup) ||
       Boolean(keysRef.current.s || keysRef.current.arrowdown);
-    if (swipeRef.current.active || hasKeyboardInput) {
-      return;
+    if (!swipeRef.current.active && !hasKeyboardInput && control.pendingInputs.length === 0) {
+      inputStateRef.current.targetNorm = authoritativeNorm;
+      control.targetNorm = authoritativeNorm;
     }
-    const nextNorm = clamp(localPlayer.paddle.y / room.arena.height, 0, 1);
-    inputStateRef.current.targetNorm = nextNorm;
-    localControlRef.current.targetNorm = nextNorm;
   }, [isSpectator, localPlayer, room?.arena?.height]);
 
   const setTouchTarget = useCallback((nextValue) => {
     const normalized = clamp(nextValue, 0, 1);
     inputStateRef.current.targetNorm = normalized;
     localControlRef.current.targetNorm = normalized;
+  }, []);
+
+  const emitInputCommand = useCallback((payload, sentAt) => {
+    const control = localControlRef.current;
+    const seq = control.nextInputSeq;
+    control.nextInputSeq += 1;
+
+    const packet = {
+      seq,
+      direction: clamp(Number(payload.direction || 0), -1, 1),
+      targetY: typeof payload.targetY === "number" ? clamp(payload.targetY, 0, 1) : payload.targetY ?? null,
+      clientSentAt: sentAt,
+    };
+
+    if (typeof packet.targetY === "number") {
+      const pending = control.pendingInputs;
+      const last = pending[pending.length - 1] || null;
+      if (
+        !last ||
+        Math.abs(last.targetY - packet.targetY) > 0.0005 ||
+        Math.abs(last.direction - packet.direction) > 0.01
+      ) {
+        pending.push({
+          seq,
+          targetY: packet.targetY,
+          direction: packet.direction,
+          sentAt,
+        });
+        if (pending.length > 160) {
+          pending.splice(0, pending.length - 160);
+        }
+      }
+    }
+
+    sendInputRef.current(packet);
   }, []);
 
   const clearTouchTarget = useCallback(() => {
@@ -209,7 +262,7 @@ export default function GameScreen({
       ) {
         state.lastSentNorm = state.targetNorm;
         state.lastTargetSentAt = now;
-        sendInputRef.current({ direction, targetY: state.targetNorm });
+        emitInputCommand({ direction, targetY: state.targetNorm }, now);
       }
 
       rafId = requestAnimationFrame(loop);
@@ -221,10 +274,12 @@ export default function GameScreen({
       const state = inputStateRef.current;
       state.lastSentNorm = null;
       state.lastTargetSentAt = 0;
-      localControlRef.current.direction = 0;
-      sendInputRef.current({ direction: 0, targetY: null });
+      const control = localControlRef.current;
+      control.direction = 0;
+      control.pendingInputs = [];
+      emitInputCommand({ direction: 0, targetY: null }, performance.now());
     };
-  }, [isSpectator]);
+  }, [emitInputCommand, isSpectator]);
 
   const activeEffects = useMemo(() => {
     if (!localPlayer) {

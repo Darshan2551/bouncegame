@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 
 import { PADDLE_STYLES, POWERUP_BADGES } from "../lib/constants";
+const INTERPOLATION_DELAY_MS = 100;
+const SNAPSHOT_TTL_MS = 2000;
+const MAX_SNAPSHOTS = 80;
 
 function roundedRect(ctx, x, y, width, height, radius) {
   const r = Math.min(radius, width / 2, height / 2);
@@ -21,9 +24,34 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function sampleSnapshot(buffer, renderTime) {
+  if (!buffer || buffer.length === 0) {
+    return null;
+  }
+  if (renderTime <= buffer[0].time) {
+    return buffer[0];
+  }
+  for (let index = 1; index < buffer.length; index += 1) {
+    const current = buffer[index];
+    if (current.time >= renderTime) {
+      const previous = buffer[index - 1];
+      const span = Math.max(1, current.time - previous.time);
+      const alpha = clamp((renderTime - previous.time) / span, 0, 1);
+      return {
+        x: lerp(previous.x, current.x, alpha),
+        y: lerp(previous.y, current.y, alpha),
+      };
+    }
+  }
+  return buffer[buffer.length - 1];
+}
+
 export default function GameCanvas({ room, playerId, localControlRef = null }) {
   const canvasRef = useRef(null);
   const stateRef = useRef(room);
+  const snapshotBufferRef = useRef(new Map());
+  const clockOffsetRef = useRef(0);
+  const hasClockSyncRef = useRef(false);
   const particlesRef = useRef([]);
   const impactIdRef = useRef(null);
   const shakeRef = useRef({ magnitude: 0 });
@@ -36,6 +64,48 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
 
   useEffect(() => {
     stateRef.current = room;
+    const snapshotTime = Number(room?.serverTime || Date.now());
+    const nowLocal = Date.now();
+
+    if (!hasClockSyncRef.current) {
+      hasClockSyncRef.current = true;
+      clockOffsetRef.current = nowLocal - snapshotTime;
+    } else {
+      clockOffsetRef.current = lerp(clockOffsetRef.current, nowLocal - snapshotTime, 0.08);
+    }
+
+    const buffers = snapshotBufferRef.current;
+    const activeIds = new Set(room.players.map((player) => player.id));
+    for (const id of buffers.keys()) {
+      if (!activeIds.has(id)) {
+        buffers.delete(id);
+      }
+    }
+
+    for (const player of room.players) {
+      const buffer = buffers.get(player.id) || [];
+      const entry = {
+        time: snapshotTime,
+        x: player.paddle.x,
+        y: player.paddle.y,
+      };
+      const tail = buffer[buffer.length - 1] || null;
+      if (tail && tail.time === entry.time) {
+        tail.x = entry.x;
+        tail.y = entry.y;
+      } else if (!tail || tail.time < entry.time) {
+        buffer.push(entry);
+      }
+
+      const cutoff = snapshotTime - SNAPSHOT_TTL_MS;
+      while (buffer.length > 0 && buffer[0].time < cutoff) {
+        buffer.shift();
+      }
+      if (buffer.length > MAX_SNAPSHOTS) {
+        buffer.splice(0, buffer.length - MAX_SNAPSHOTS);
+      }
+      buffers.set(player.id, buffer);
+    }
   }, [room]);
 
   useEffect(() => {
@@ -97,6 +167,7 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
       lastFrameRef.current = frameTs;
       const paddleAlpha = Math.min(1, dt * 17);
       const ballAlpha = Math.min(1, dt * 20);
+      const renderServerTime = Date.now() - clockOffsetRef.current - INTERPOLATION_DELAY_MS;
 
       const renderState = renderStateRef.current;
       if (!renderState.initialized) {
@@ -124,6 +195,8 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
           const limitTop = halfHeight;
           const limitBottom = arena.height - halfHeight;
           const authoritativeY = clamp(player.paddle.y, limitTop, limitBottom);
+          const snapshots = snapshotBufferRef.current.get(player.id);
+          const sampled = !isLocal ? sampleSnapshot(snapshots, renderServerTime) : null;
 
           if (jumped) {
             prev.x = player.paddle.x;
@@ -131,21 +204,31 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
             prev.targetY = authoritativeY;
           } else {
             let desiredTargetY = authoritativeY;
+            let desiredTargetX = player.paddle.x;
+
             if (isLocal && (state.status === "live" || state.status === "countdown")) {
               const localNorm = Number(localControlRef.current.targetNorm);
               if (Number.isFinite(localNorm)) {
                 desiredTargetY = clamp(localNorm, 0, 1) * arena.height;
                 desiredTargetY = clamp(desiredTargetY, limitTop, limitBottom);
               }
+            } else if (sampled) {
+              desiredTargetY = clamp(sampled.y, limitTop, limitBottom);
+              desiredTargetX = sampled.x;
             }
 
             const targetAlpha = Math.min(1, dt * 24);
-            const moveAlpha = Math.min(1, dt * 18);
+            const moveAlpha = isLocal ? Math.min(1, dt * 20) : Math.min(1, dt * 16);
             prev.targetY = lerp(prev.targetY, desiredTargetY, targetAlpha);
             prev.y = lerp(prev.y, prev.targetY, moveAlpha);
-            prev.x = lerp(prev.x, player.paddle.x, paddleAlpha);
+            prev.x = lerp(prev.x, desiredTargetX, paddleAlpha);
 
-            const correctionAlpha = isLocal ? Math.min(1, dt * 6) : Math.min(1, dt * 11);
+            const pendingInputs = isLocal ? localControlRef.current.pendingInputs.length : 0;
+            const correctionAlpha = isLocal
+              ? pendingInputs > 0
+                ? Math.min(1, dt * 4)
+                : Math.min(1, dt * 9)
+              : Math.min(1, dt * 8);
             const correctionGap = authoritativeY - prev.y;
             if (Math.abs(correctionGap) > 130) {
               prev.y = authoritativeY;

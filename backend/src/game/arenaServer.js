@@ -708,7 +708,17 @@ class ArenaServer {
       return;
     }
 
-    player.paddle.inputDir = clamp(Number(payload.direction || 0), -1, 1);
+    const seq = Number(payload.seq);
+    if (Number.isFinite(seq)) {
+      const normalizedSeq = Math.max(0, Math.floor(seq));
+      if (normalizedSeq < player.paddle.lastInputSeq) {
+        return;
+      }
+      player.paddle.lastInputSeq = normalizedSeq;
+    }
+
+    const direction = Number(payload.direction);
+    player.paddle.inputDir = Number.isFinite(direction) ? clamp(direction, -1, 1) : 0;
 
     if (typeof payload.targetY === "number" && Number.isFinite(payload.targetY)) {
       player.paddle.targetY = clamp(payload.targetY, 0, 1);
@@ -1414,6 +1424,7 @@ class ArenaServer {
         inputDir: 0,
         targetY: null,
         lastInputAt: 0,
+        lastInputSeq: 0,
       },
     };
 
@@ -1486,6 +1497,7 @@ class ArenaServer {
         inputDir: 0,
         targetY: null,
         lastInputAt: 0,
+        lastInputSeq: 0,
       },
     };
 
@@ -1734,6 +1746,7 @@ class ArenaServer {
         y: player.paddle.y,
         width: player.paddle.width,
         height: player.paddle.height,
+        inputSeq: player.paddle.lastInputSeq || 0,
       },
     }));
 
@@ -1744,6 +1757,7 @@ class ArenaServer {
     }));
 
     return {
+      serverTime: now,
       code: room.code,
       modeKey: room.modeKey,
       mode: room.mode,
