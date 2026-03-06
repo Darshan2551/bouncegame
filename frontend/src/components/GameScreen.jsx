@@ -109,6 +109,13 @@ export default function GameScreen({
         return;
       }
       event.preventDefault();
+      if (event.currentTarget?.setPointerCapture && typeof event.pointerId === "number") {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          // Ignore capture errors on browsers that report unsupported pointer capture.
+        }
+      }
       if (direction < 0) {
         keysRef.current.arrowup = true;
         keysRef.current.arrowdown = false;
@@ -122,16 +129,13 @@ export default function GameScreen({
   );
 
   const handleMobileHoldEnd = useCallback(
-    (direction, event) => {
+    (event) => {
       if (isSpectator || !isTouchDevice) {
         return;
       }
       event.preventDefault();
-      if (direction < 0) {
-        keysRef.current.arrowup = false;
-      } else {
-        keysRef.current.arrowdown = false;
-      }
+      keysRef.current.arrowup = false;
+      keysRef.current.arrowdown = false;
       refreshInputActivity();
     },
     [isSpectator, isTouchDevice, refreshInputActivity]
@@ -391,26 +395,22 @@ export default function GameScreen({
                 <button
                   type="button"
                   className={mobileControlButtonClass}
+                  style={{ touchAction: "none" }}
                   onPointerDown={(event) => handleMobileHoldStart(-1, event)}
-                  onPointerUp={(event) => handleMobileHoldEnd(-1, event)}
-                  onPointerCancel={(event) => handleMobileHoldEnd(-1, event)}
-                  onPointerLeave={(event) => handleMobileHoldEnd(-1, event)}
-                  onTouchStart={(event) => handleMobileHoldStart(-1, event)}
-                  onTouchEnd={(event) => handleMobileHoldEnd(-1, event)}
-                  onTouchCancel={(event) => handleMobileHoldEnd(-1, event)}
+                  onPointerUp={handleMobileHoldEnd}
+                  onPointerCancel={handleMobileHoldEnd}
+                  onLostPointerCapture={handleMobileHoldEnd}
                 >
                   Up
                 </button>
                 <button
                   type="button"
                   className={mobileControlButtonClass}
+                  style={{ touchAction: "none" }}
                   onPointerDown={(event) => handleMobileHoldStart(1, event)}
-                  onPointerUp={(event) => handleMobileHoldEnd(1, event)}
-                  onPointerCancel={(event) => handleMobileHoldEnd(1, event)}
-                  onPointerLeave={(event) => handleMobileHoldEnd(1, event)}
-                  onTouchStart={(event) => handleMobileHoldStart(1, event)}
-                  onTouchEnd={(event) => handleMobileHoldEnd(1, event)}
-                  onTouchCancel={(event) => handleMobileHoldEnd(1, event)}
+                  onPointerUp={handleMobileHoldEnd}
+                  onPointerCancel={handleMobileHoldEnd}
+                  onLostPointerCapture={handleMobileHoldEnd}
                 >
                   Down
                 </button>
