@@ -228,14 +228,13 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
             const inputActive = isLocal ? Boolean(localControl?.inputActive) : false;
             const inputAgeMs = isLocal ? frameTs - Number(localControl?.lastInputAt || 0) : Number.POSITIVE_INFINITY;
             const recentlyControlled = isLocal && (inputActive || inputAgeMs < 90);
-            const hasUnackedControl = isLocal && recentlyControlled && pendingInputs > 0;
+            const activelyControlled = isLocal && recentlyControlled;
+            const hasUnackedControl = activelyControlled && pendingInputs > 0;
 
             let correctionAlpha = Math.min(1, dt * 8);
             if (isLocal) {
-              if (hasUnackedControl) {
+              if (activelyControlled) {
                 correctionAlpha = Math.min(1, dt * 0.55);
-              } else if (recentlyControlled) {
-                correctionAlpha = Math.min(1, dt * 3.3);
               } else if (pendingInputs > 0) {
                 correctionAlpha = Math.min(1, dt * 5.8);
               } else {
@@ -243,8 +242,8 @@ export default function GameCanvas({ room, playerId, localControlRef = null }) {
               }
             }
             const correctionGap = authoritativeY - prev.y;
-            const snapGap = hasUnackedControl ? 200 : isLocal && recentlyControlled ? 170 : 130;
-            const deferTinyCorrection = hasUnackedControl && Math.abs(correctionGap) < 70;
+            const snapGap = hasUnackedControl ? 220 : activelyControlled ? 200 : 130;
+            const deferTinyCorrection = activelyControlled && Math.abs(correctionGap) < 85;
 
             if (Math.abs(correctionGap) > snapGap) {
               prev.y = authoritativeY;

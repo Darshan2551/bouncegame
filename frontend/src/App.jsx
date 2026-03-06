@@ -13,6 +13,7 @@ import LeaderboardPanel from "./components/LeaderboardPanel";
 import { createSocket } from "./lib/socket";
 import { ensureSessionId, getSavedRoomCode, saveRoomCode } from "./lib/session";
 import { AVATARS } from "./lib/constants";
+import { soundManager } from "./lib/soundManager";
 
 const initialProfile = {
   name: "Player",
@@ -46,6 +47,39 @@ export default function App() {
   useEffect(() => {
     roomRef.current = room;
   }, [room]);
+
+  useEffect(() => {
+    let removed = false;
+
+    const tryUnlock = () => {
+      void soundManager.unlock().then((unlocked) => {
+        if (unlocked) {
+          removeUnlockListeners();
+        }
+      });
+    };
+
+    const removeUnlockListeners = () => {
+      if (removed) {
+        return;
+      }
+      removed = true;
+      window.removeEventListener("pointerdown", tryUnlock);
+      window.removeEventListener("touchstart", tryUnlock);
+      window.removeEventListener("click", tryUnlock);
+      window.removeEventListener("keydown", tryUnlock);
+    };
+
+    void soundManager.preload();
+    window.addEventListener("pointerdown", tryUnlock);
+    window.addEventListener("touchstart", tryUnlock);
+    window.addEventListener("click", tryUnlock);
+    window.addEventListener("keydown", tryUnlock);
+
+    return () => {
+      removeUnlockListeners();
+    };
+  }, []);
 
   const fetchLeaderboard = useCallback(async () => {
     setLeaderboardLoading(true);
@@ -88,7 +122,18 @@ export default function App() {
     });
 
     socket.on("room_update", (payload) => {
-      setRoom(payload);
+      setRoom((current) => {
+        if (
+          current &&
+          current.status !== "lobby" &&
+          payload &&
+          payload.status !== "lobby" &&
+          payload.status !== "finished"
+        ) {
+          return current;
+        }
+        return payload;
+      });
     });
 
     socket.on("game_state", (payload) => {

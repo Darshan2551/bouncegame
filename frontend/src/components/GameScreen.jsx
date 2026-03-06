@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 import GameCanvas from "./GameCanvas";
 import ReactionPad from "./ReactionPad";
 import EndGameOverlay from "./EndGameOverlay";
 import { POWERUP_BADGES } from "../lib/constants";
+import { soundManager } from "../lib/soundManager";
 
 function formatTimer(ms) {
   const totalSeconds = Math.floor(ms / 1000);
@@ -48,6 +49,11 @@ export default function GameScreen({
     pendingInputs: [],
   });
   const sendInputRef = useRef(onSendInput);
+  const previousRoomRef = useRef(null);
+  const lastImpactIdRef = useRef("");
+  const countdownSecondRef = useRef(null);
+  const [soundMuted, setSoundMuted] = useState(() => soundManager.isMuted());
+  const [soundVolume, setSoundVolume] = useState(() => Math.round(soundManager.getVolume() * 100));
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
   const rage = localPlayer?.energy || 0;
@@ -76,6 +82,76 @@ export default function GameScreen({
     }
     return speed / arenaHeight;
   }, [localPlayer?.effects?.freezeMs, localPlayer?.effects?.speedBoostMs, room?.arena?.height]);
+
+  useEffect(() => {
+    soundManager.setMuted(soundMuted);
+  }, [soundMuted]);
+
+  useEffect(() => {
+    soundManager.setVolume(soundVolume / 100);
+  }, [soundVolume]);
+
+  useEffect(() => {
+    const previousRoom = previousRoomRef.current;
+    if (!previousRoom) {
+      previousRoomRef.current = room;
+      lastImpactIdRef.current = room?.lastImpact?.id || "";
+      return;
+    }
+
+    const impactId = room?.lastImpact?.id || "";
+    if (impactId && impactId !== lastImpactIdRef.current) {
+      if (impactId.startsWith("impact")) {
+        soundManager.playPaddleHit({ gain: 0.9 });
+      } else if (impactId.startsWith("shield")) {
+        soundManager.playWallBounce({ gain: 0.65, playbackRate: 0.88 });
+      }
+      lastImpactIdRef.current = impactId;
+    } else if (!impactId) {
+      lastImpactIdRef.current = "";
+    }
+
+    const previousScores = previousRoom.scores || { left: 0, right: 0 };
+    const currentScores = room.scores || { left: 0, right: 0 };
+    if (currentScores.left > previousScores.left || currentScores.right > previousScores.right) {
+      soundManager.playScore({ gain: 0.95 });
+    }
+
+    const previousBall = previousRoom.ball;
+    const currentBall = room.ball;
+    const arenaHeight = Number(room?.arena?.height || 0);
+    if (previousBall && currentBall && arenaHeight > 0) {
+      const prevVy = Number(previousBall.vy || 0);
+      const nextVy = Number(currentBall.vy || 0);
+      const vyFlipped = Math.sign(prevVy) !== Math.sign(nextVy) && Math.abs(prevVy) > 50 && Math.abs(nextVy) > 50;
+      const nearTop = currentBall.y <= currentBall.radius + 6;
+      const nearBottom = currentBall.y >= arenaHeight - currentBall.radius - 6;
+      if (vyFlipped && (nearTop || nearBottom)) {
+        soundManager.playWallBounce({ gain: 0.75 });
+      }
+    }
+
+    if (room.status === "countdown") {
+      const second = Math.max(1, Math.ceil(room.countdownMs / 1000));
+      if (countdownSecondRef.current !== second) {
+        const boostedRate = 0.94 + (3 - Math.min(3, second)) * 0.1;
+        soundManager.playGameStart({ gain: 0.72, playbackRate: boostedRate });
+        countdownSecondRef.current = second;
+      }
+    } else {
+      countdownSecondRef.current = null;
+    }
+
+    if (previousRoom.status === "countdown" && room.status === "live") {
+      soundManager.playGameStart({ gain: 0.95, playbackRate: 1.16 });
+    }
+
+    if (previousRoom.status !== "finished" && room.status === "finished") {
+      soundManager.playVictory({ gain: 1 });
+    }
+
+    previousRoomRef.current = room;
+  }, [room]);
 
   useEffect(() => {
     sendInputRef.current = onSendInput;
@@ -154,6 +230,21 @@ export default function GameScreen({
       refreshInputActivity();
     },
     [isSpectator, isTouchDevice, refreshInputActivity]
+  );
+
+  const toggleSoundMuted = useCallback(() => {
+    setSoundMuted((current) => !current);
+  }, []);
+
+  const handleVolumeChange = useCallback(
+    (event) => {
+      const next = clamp(Number(event.target.value) || 0, 0, 100);
+      setSoundVolume(next);
+      if (next > 0 && soundMuted) {
+        setSoundMuted(false);
+      }
+    },
+    [soundMuted]
   );
 
   const setTargetFromDirection = useCallback((direction, dt) => {
@@ -364,6 +455,26 @@ export default function GameScreen({
               <span className="rounded-md border border-slate-700 bg-slate-950/80 px-2 py-1 uppercase tracking-[0.14em]">
                 Timer {formatTimer(room.timerMs)}
               </span>
+              <button
+                type="button"
+                onClick={toggleSoundMuted}
+                className="rounded-md border border-slate-600 bg-slate-900/70 px-2 py-1 text-xs uppercase tracking-[0.14em]"
+              >
+                {soundMuted ? "Unmute" : "Mute"}
+              </button>
+              <label className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/80 px-2 py-1">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-slate-300">Vol</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={soundVolume}
+                  onChange={handleVolumeChange}
+                  className="h-1 w-16 accent-cyan-300 md:w-24"
+                  aria-label="Game sound volume"
+                />
+              </label>
               <button
                 type="button"
                 onClick={onLeave}
