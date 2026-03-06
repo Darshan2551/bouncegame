@@ -28,6 +28,8 @@ export default function GameScreen({
   onReturnLobby,
   onLeave,
 }) {
+  const mobileControlButtonClass =
+    "h-16 min-w-[8rem] rounded-xl border border-cyan-200/50 bg-slate-950/85 px-5 text-sm font-semibold uppercase tracking-[0.16em] text-cyan-100 active:scale-[0.98]";
   const keysRef = useRef(Object.create(null));
   const inputStateRef = useRef({
     targetNorm: 0.5,
@@ -385,10 +387,10 @@ export default function GameScreen({
             </AnimatePresence>
 
             {!isSpectator && isTouchDevice && (
-              <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+              <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-3">
                 <button
                   type="button"
-                  className="rounded-lg border border-cyan-200/40 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 active:scale-[0.98]"
+                  className={mobileControlButtonClass}
                   onPointerDown={(event) => handleMobileHoldStart(-1, event)}
                   onPointerUp={(event) => handleMobileHoldEnd(-1, event)}
                   onPointerCancel={(event) => handleMobileHoldEnd(-1, event)}
@@ -401,7 +403,7 @@ export default function GameScreen({
                 </button>
                 <button
                   type="button"
-                  className="rounded-lg border border-cyan-200/40 bg-slate-950/85 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100 active:scale-[0.98]"
+                  className={mobileControlButtonClass}
                   onPointerDown={(event) => handleMobileHoldStart(1, event)}
                   onPointerUp={(event) => handleMobileHoldEnd(1, event)}
                   onPointerCancel={(event) => handleMobileHoldEnd(1, event)}
