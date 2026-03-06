@@ -61,6 +61,21 @@ export default function GameScreen({
       "ontouchstart" in window
     );
   }, []);
+  const predictedSpeedNormPerSec = useMemo(() => {
+    const arenaHeight = Number(room?.arena?.height || 0);
+    if (!arenaHeight) {
+      return 0.75;
+    }
+    if ((localPlayer?.effects?.freezeMs || 0) > 0) {
+      return 0;
+    }
+
+    let speed = 540;
+    if ((localPlayer?.effects?.speedBoostMs || 0) > 0) {
+      speed *= 1.45;
+    }
+    return speed / arenaHeight;
+  }, [localPlayer?.effects?.freezeMs, localPlayer?.effects?.speedBoostMs, room?.arena?.height]);
 
   useEffect(() => {
     sendInputRef.current = onSendInput;
@@ -146,9 +161,8 @@ export default function GameScreen({
     if (direction === 0) {
       return;
     }
-    const keyboardSpeedNormPerSec = 0.95;
-    state.targetNorm = clamp(state.targetNorm + direction * keyboardSpeedNormPerSec * dt, 0, 1);
-  }, []);
+    state.targetNorm = clamp(state.targetNorm + direction * predictedSpeedNormPerSec * dt, 0, 1);
+  }, [predictedSpeedNormPerSec]);
 
   const emitInputCommand = useCallback((payload, sentAt) => {
     const control = localControlRef.current;
@@ -262,13 +276,15 @@ export default function GameScreen({
       }
 
       const directionChanged = direction !== state.lastSentDirection;
-      const sendInterval = direction !== 0 ? 14 : 40;
-      const normDeltaThreshold = 0.0018;
+      const sendInterval = direction !== 0 ? 50 : 90;
+      const elapsedSinceLastSend = now - state.lastTargetSentAt;
+      const normDelta =
+        state.lastSentNorm === null ? Number.POSITIVE_INFINITY : Math.abs(state.targetNorm - state.lastSentNorm);
+      const intervalReached = elapsedSinceLastSend >= sendInterval;
       if (
         state.lastSentNorm === null ||
-        Math.abs(state.targetNorm - state.lastSentNorm) > normDeltaThreshold ||
         directionChanged ||
-        now - state.lastTargetSentAt >= sendInterval
+        (intervalReached && (direction !== 0 || normDelta > 0.01))
       ) {
         state.lastSentNorm = state.targetNorm;
         state.lastSentDirection = direction;

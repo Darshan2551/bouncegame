@@ -1,3 +1,16 @@
 {
-  "users": []
+  "users": [
+    {
+      "id": "player",
+      "username": "Player",
+      "wins": 0,
+      "losses": 1,
+      "xp": 5,
+      "rank": 1,
+      "winStreak": 0,
+      "maxWinStreak": 0,
+      "matchesPlayed": 1,
+      "lastPlayedAt": 1772771712737
+    }
+  ]
 }
