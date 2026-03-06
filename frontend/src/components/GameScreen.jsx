@@ -54,9 +54,17 @@ export default function GameScreen({
   const countdownSecondRef = useRef(null);
   const [soundMuted, setSoundMuted] = useState(() => soundManager.isMuted());
   const [soundVolume, setSoundVolume] = useState(() => Math.round(soundManager.getVolume() * 100));
+  const [musicVolume, setMusicVolume] = useState(() => Math.round(soundManager.getMusicVolume() * 100));
 
   const localPlayer = room.players.find((player) => player.id === playerId) || null;
   const rage = localPlayer?.energy || 0;
+  const isClutchPoint = useMemo(() => {
+    if (room.status !== "live") {
+      return false;
+    }
+    const maxScore = Math.max(Number(room?.scores?.left || 0), Number(room?.scores?.right || 0));
+    return maxScore >= Math.max(1, Number(room.winningScore || 1) - 1);
+  }, [room.status, room?.scores?.left, room?.scores?.right, room.winningScore]);
   const isTouchDevice = useMemo(() => {
     if (typeof window === "undefined") {
       return false;
@@ -92,6 +100,27 @@ export default function GameScreen({
   }, [soundVolume]);
 
   useEffect(() => {
+    soundManager.setMusicVolume(musicVolume / 100);
+  }, [musicVolume]);
+
+  useEffect(() => {
+    soundManager.startBgm({ mood: "live" });
+    return () => {
+      soundManager.stopBgm({ fadeMs: 280 });
+    };
+  }, []);
+
+  useEffect(() => {
+    const maxScore = Math.max(Number(room?.scores?.left || 0), Number(room?.scores?.right || 0));
+    const clutch = room.status === "live" && maxScore >= Math.max(1, Number(room.winningScore || 1) - 1);
+    if (room.status === "countdown") {
+      soundManager.startBgm({ mood: "countdown" });
+    } else if (room.status === "live") {
+      soundManager.startBgm({ mood: clutch ? "clutch" : "live" });
+    } else if (room.status === "finished") {
+      soundManager.startBgm({ mood: "finished" });
+    }
+
     const previousRoom = previousRoomRef.current;
     if (!previousRoom) {
       previousRoomRef.current = room;
@@ -115,6 +144,7 @@ export default function GameScreen({
     const currentScores = room.scores || { left: 0, right: 0 };
     if (currentScores.left > previousScores.left || currentScores.right > previousScores.right) {
       soundManager.playScore({ gain: 0.95 });
+      soundManager.duckBgm({ amount: 0.48, recoverMs: 260 });
     }
 
     const previousBall = previousRoom.ball;
@@ -147,6 +177,7 @@ export default function GameScreen({
     }
 
     if (previousRoom.status !== "finished" && room.status === "finished") {
+      soundManager.duckBgm({ amount: 0.62, recoverMs: 420 });
       soundManager.playVictory({ gain: 1 });
     }
 
@@ -240,6 +271,17 @@ export default function GameScreen({
     (event) => {
       const next = clamp(Number(event.target.value) || 0, 0, 100);
       setSoundVolume(next);
+      if (next > 0 && soundMuted) {
+        setSoundMuted(false);
+      }
+    },
+    [soundMuted]
+  );
+
+  const handleMusicVolumeChange = useCallback(
+    (event) => {
+      const next = clamp(Number(event.target.value) || 0, 0, 100);
+      setMusicVolume(next);
       if (next > 0 && soundMuted) {
         setSoundMuted(false);
       }
@@ -455,6 +497,15 @@ export default function GameScreen({
               <span className="rounded-md border border-slate-700 bg-slate-950/80 px-2 py-1 uppercase tracking-[0.14em]">
                 Timer {formatTimer(room.timerMs)}
               </span>
+              {isClutchPoint && (
+                <motion.span
+                  animate={{ opacity: [0.72, 1, 0.72], scale: [1, 1.03, 1] }}
+                  transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
+                  className="rounded-md border border-amber-300/70 bg-amber-500/15 px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-amber-200"
+                >
+                  Clutch
+                </motion.span>
+              )}
               <button
                 type="button"
                 onClick={toggleSoundMuted}
@@ -463,7 +514,7 @@ export default function GameScreen({
                 {soundMuted ? "Unmute" : "Mute"}
               </button>
               <label className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/80 px-2 py-1">
-                <span className="text-[11px] uppercase tracking-[0.14em] text-slate-300">Vol</span>
+                <span className="text-[11px] uppercase tracking-[0.14em] text-slate-300">Master</span>
                 <input
                   type="range"
                   min="0"
@@ -473,6 +524,19 @@ export default function GameScreen({
                   onChange={handleVolumeChange}
                   className="h-1 w-16 accent-cyan-300 md:w-24"
                   aria-label="Game sound volume"
+                />
+              </label>
+              <label className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/80 px-2 py-1">
+                <span className="text-[11px] uppercase tracking-[0.14em] text-slate-300">BGM</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={musicVolume}
+                  onChange={handleMusicVolumeChange}
+                  className="h-1 w-14 accent-lime-300 md:w-20"
+                  aria-label="Background music volume"
                 />
               </label>
               <button
